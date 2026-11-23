@@ -5,11 +5,21 @@ Swaps go through [Flashift](https://docs.flashift.app) and/or [Trocador](https:/
 called directly with your own API keys. No Lambda or other intermediary is involved.
 
 ## Setup
+Works with Python 3.9 and newer. Tested on clean Debian 13, Debian testing, and Ubuntu 24.04, 26.04 and 26.10
+(x86-64 and arm64), and on macOS.
+
+On Debian/Ubuntu, first: `sudo apt install python3 python3-venv`. Then:
 ```
 cd drain
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install --no-deps -r requirements.txt
 cp config.example.ini config.ini && chmod 600 config.ini
+.venv/bin/python -m unittest     # optional: offline self-test
 ```
+Keep `--no-deps`: ARK's crypto library lists `coincurve` as a dependency, but coincurve can't be
+installed on Python 3.14+ (Ubuntu 26.04, Debian testing). There drain uses a pure-Python stand-in
+(`modules/coincurve_compat.py`) that produces byte-identical keys and signatures; the tests check this.
+
 Fill in `config.ini` (git-ignored). API keys and phrases can come from the environment instead:
 `FLASHIFT_API_KEY`, `TROCADOR_API_KEY`, `DRAIN_PASSPHRASE`, `DRAIN_SECONDPHRASE`.
 

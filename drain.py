@@ -14,6 +14,12 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
+try:
+    import coincurve  # noqa: F401  (used by arkecosystem-crypto)
+except ImportError:  # no coincurve wheels for Python 3.14+; use the pure-Python stand-in
+    from modules import coincurve_compat
+    sys.modules['coincurve'] = coincurve_compat
+
 from client import ArkClient
 from crypto.configuration.network import set_custom_network
 from crypto.identity.address import address_from_passphrase

@@ -498,6 +498,67 @@ class RunTests(HTTPTest):
         self.assertEqual(self.http.calls[0][2]['params']['amount'], '500')
 
 
+def native_coincurve():
+    """The real coincurve package, or None (drain may have put the compat module under that name)."""
+    import importlib.machinery
+    import importlib.util
+    spec = importlib.machinery.PathFinder.find_spec('coincurve')
+    if spec is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SigningBackendTests(unittest.TestCase):
+    """Signing must be byte-identical with real coincurve and with modules/coincurve_compat (Python 3.14+)."""
+    TX = ('94d3222d5d84030b41560f023599ad63c085c8a23d7019564d7f3d10b33fbd0e',
+          '7d5a3349fc9de3503f2251feabc1efa1bde753ee3fb43980410296b12798e0b8520a0a0f8bc9e8c3ee21df72a084447f2599c4cbadc2f0c604ccbe50b7b1bba9',
+          'd8d524e1ac5826f033768859147a6b1feae5bdbec1bae3b078b665c2bf07d38e832bdec76f04fd7b0938f1a2d951fa0585eb317fb3c9c1d9efe0a800f6f67acf')
+    SCRIPT = (
+        'import sys, json\n'
+        'if sys.argv[1] == "compat": sys.modules["coincurve"] = None\n'
+        'sys.path.insert(0, sys.argv[2]); import drain; drain.get_client("x")\n'
+        'tx = drain.build_transfer({"passphrase": sys.argv[3], "secondphrase": sys.argv[4]}, sys.argv[5], 12345670000, 1005000, 7)\n'
+        'print(json.dumps([sys.modules["coincurve"].__name__, tx["id"], tx["signature"], tx["signSignature"], tx["senderPublicKey"],'
+        ' drain.address_from_passphrase(sys.argv[3], network_version=23)]))\n')
+
+    def sign_with(self, backend):
+        out = subprocess.run([sys.executable, '-W', 'ignore', '-c', self.SCRIPT, backend, str(ROOT), PASS, SECOND, DEP],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_known_vector_both_backends(self):
+        backends = ['compat'] + (['native'] if native_coincurve() else [])
+        for backend in backends:
+            with self.subTest(backend):
+                name, txid, sig, sig2, pk, addr = self.sign_with(backend)
+                self.assertEqual(name, 'modules.coincurve_compat' if backend == 'compat' else 'coincurve')
+                self.assertEqual((txid, sig, sig2), self.TX)
+                self.assertEqual(pk, '03e74366a0e299113121209b19de37dcba6cfb430cdd89cd8c4e18e03a6c6cf0eb')
+                self.assertEqual(addr, ME)
+
+    def test_compat_keys(self):
+        from modules import coincurve_compat as cc
+        g = cc.PrivateKey.from_hex('00' * 31 + '01').public_key
+        self.assertEqual(g.format().hex(), '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798')
+        self.assertEqual(cc.PublicKey(g.format(compressed=False)).format(), g.format())
+        for bad in ('00' * 32, 'ff' * 32, '01' * 31):
+            with self.assertRaises(ValueError):
+                cc.PrivateKey.from_hex(bad)
+        for bad in (b'', b'\x02' + b'\x00' * 31, b'\x05' + b'\x01' * 32, b'\x04' + b'\x01' * 64):
+            with self.assertRaises(ValueError):
+                cc.PublicKey(bad)
+        coincurve = native_coincurve()
+        if coincurve is None:
+            return
+        for _ in range(100):
+            k = os.urandom(32)
+            if 0 < int.from_bytes(k, 'big') < cc.n:
+                self.assertEqual(cc.PrivateKey(k).public_key.format(), coincurve.PrivateKey(k).public_key.format())
+
+
 class LockTest(unittest.TestCase):
     def test_second_run_is_refused(self):
         import fcntl
