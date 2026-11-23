@@ -4,6 +4,9 @@ Drains an ARK wallet (or a fixed amount of it) into another coin, by default USD
 Swaps go through [Flashift](https://docs.flashift.app) and/or [Trocador](https://trocador.app/docs),
 called directly with your own API keys. No Lambda or other intermediary is involved.
 
+Based on [drain](https://github.com/galperins4/drain) by [galperins4](https://github.com/galperins4)
+(`ark` branch), who wrote the original tool; see Credits below.
+
 ## Setup (Ubuntu)
 Needs Python 3.10 or newer. Tested on clean Ubuntu 22.04, 24.04, 26.04 and 26.10 (x86-64 and arm64)
 and Debian 13.
@@ -84,3 +87,10 @@ Runs offline against a fake ARK node and faked Flashift/Trocador responses.
 
 ## Configuration
 See `config.example.ini` for every option with comments.
+
+## Credits
+drain was created by **[galperins4](https://github.com/galperins4)**: https://github.com/galperins4/drain.
+This repository keeps the original commit history. The personal version replaces the original's
+Lambda-based exchange calls with direct Flashift/Trocador clients, and adds the safety checks, tests and
+Ubuntu install support described above.
+
