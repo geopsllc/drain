@@ -1,151 +1,121 @@
-from client import ArkClient
+"""Drain an ARK wallet into another coin (e.g. USDC on Polygon) via Flashift and/or Trocador.
+
+Config is read from $DRAIN_CONFIG, or config.ini next to this script (see config.example.ini).
+With test = Y it only fetches quotes; no order is created and nothing is sent.
+"""
+import logging
+import os
+import sys
 from configparser import ConfigParser
-from pathlib import Path
-from modules.exchange import Exchange
-from crypto.transactions.builder.transfer import Transfer
-from crypto.configuration.network import set_custom_network
 from datetime import datetime
+from pathlib import Path
+
+from client import ArkClient
+from crypto.configuration.network import set_custom_network
+from crypto.transactions.builder.transfer import Transfer
+
+from modules.exchange import ARK_ADDRESS, ATOMIC, Exchange, truncate
+
+HERE = Path(__file__).resolve().parent
+log = logging.getLogger('drain')
 
 
 def get_config():
-    home = str(Path.home())
-    config_path = home+'/drain/config.ini'
-    config = ConfigParser()
-    config.read(config_path)
+    path = Path(os.environ.get('DRAIN_CONFIG', HERE / 'config.ini'))
+    if not path.exists():
+        sys.exit(f'Config not found: {path} (copy config.example.ini to config.ini)')
+    parser = ConfigParser(inline_comment_prefixes=(';', '#'))
+    parser.read(path)
+    s = parser['static']
+    config = {
+        'node': s.get('node', 'http://localhost:4003/api'),
+        'test': s.get('test', 'Y').upper() == 'Y',
+        'passphrase': os.environ.get('DRAIN_PASSPHRASE') or s.get('passphrase'),
+        'secondphrase': os.environ.get('DRAIN_SECONDPHRASE') or s.get('secondphrase', 'None'),
+        'convert_from': s.get('convert_from', 'ark'),
+        'convert_address': s.get('convert_address'),
+        'convert_to': s.get('convert_to', 'usdc'),
+        'address_to': s.get('address_to'),
+        'providers': [p.strip() for p in s.get('providers', 'Flashift, Trocador').split(',') if p.strip()],
+        'fixed': s.get('fixed', 'N').upper() == 'Y',
+        'fixed_amt': float(s.get('fixed_amt', '0')),
+        'test_amt': float(s.get('test_amt', '750')),
+        'exchange_log': str(HERE / s.get('exchange_log', 'exchange.txt')),
+    }
+    for section in ('flashift', 'trocador'):
+        config[section] = dict(parser[section]) if parser.has_section(section) else {}
+    if config['secondphrase'] in (None, '', 'None'):
+        config['secondphrase'] = None
+    if not ARK_ADDRESS.match(config['convert_address'] or ''):
+        sys.exit('convert_address must be the ARK address being drained')
+    return config
 
-    config_dict = {'atomic' : int(config.get('static', 'atomic')),
-                   'test' : config.get('static', 'test'),
-                   'network' : config.get('static', 'network'),
-                   'passphrase' : config.get('static', 'passphrase'),
-                   'secondphrase' : config.get('static', 'secondphrase'),
-                   'convert_from' : config.get('static', 'convert_from'),
-                   'convert_address' : config.get('static', 'convert_address'),
-                   'convert_to' : config.get('static', 'convert_to'),
-                   'address_to' : config.get('static', 'address_to'),
-                   'network_to' : config.get('static', 'network_to'),
-                   'provider' : config.get('static', 'provider'),
-                   'fixed' : config.get('static', 'fixed'),
-                   'fixed_amt' : int(config.get('static', 'fixed_amt'))}
 
-    return config_dict
+def get_client(node):
+    set_custom_network(datetime(2017, 3, 21, 13, 0, 0), 23, 170)  # ARK mainnet epoch, version, wif
+    return ArkClient(node)
 
 
-def build_transfer_tx(config, exchange, fee, amt, n):
-    #transaction = Transfer()
-    #transaction.set_fee(fee)
-    #transaction.set_nonce(n+1)
-    net_exchange = amt-fee
+def get_fee(client):
+    dynamic = client.node.configuration()['data']['transactionPool']['dynamicFees']
+    if str(dynamic.get('enabled')).lower() == 'false':
+        return int(0.1 * ATOMIC)
+    tx_size = 230 + len('drain')
+    return int((dynamic['addonBytes']['transfer'] + tx_size) * dynamic['minFeePool'])
 
-    # exchange processing
-    pay_in = exchange.exchange_select(config['convert_address'], net_exchange, config['provider'])
-    if pay_in == config['convert_address']:
-        print('Failed Exchange - Quit Processing')
-        quit()
+
+def build_transfer(config, recipient, amount, fee, nonce):
+    tx = Transfer(recipientId=recipient, amount=amount, vendorField='drain', fee=fee)
+    tx.set_nonce(nonce + 1)
+    tx.schnorr_sign(config['passphrase'])
+    if config['secondphrase']:
+        tx.second_sign(config['secondphrase'])
+    return tx.to_dict()
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    config = get_config()
+    exchange = Exchange(config)
+
+    if config['test']:
+        amount = config['fixed_amt'] if config['fixed'] and config['fixed_amt'] else config['test_amt']
+        log.info('Test mode: quotes only for %s %s, no order is created', amount, config['convert_from'])
+        quotes = exchange.quotes(amount)
+        if not quotes:
+            sys.exit('No quotes')
+        best = quotes[0][0]
+        log.info('Would use %s via %s (%s): ~%.6f %s', best.service, best.provider, best.rate_type,
+                 best.amount_to, config['convert_to'])
+        return
+
+    client = get_client(config['node'])
+    fee = get_fee(client)
+    wallet = client.wallets.get(config['convert_address'])['data']
+    nonce, balance = int(wallet['nonce']), int(wallet['balance'])
+
+    if config['fixed']:
+        wanted = int(config['fixed_amt'] * ATOMIC)
+        if balance - fee < wanted:
+            log.info('Balance below fixed amount, draining what is there')
+            wanted = balance - fee
     else:
-        print('Succcessful Exchange')
+        wanted = balance - fee
 
-    #transaction.add_transfer(net_exchange, pay_in)
-    transaction = Transfer(recipientId=pay_in, amount=net_exchange, vendorField="drain", fee=fee)
-    transaction.set_nonce(n+1)
-    transaction.schnorr_sign(config['passphrase'])
-    
-    #transaction.sign(config['passphrase'])
-    sp = config['secondphrase']
-    if sp == 'None':
-        sp = None
-    if sp is not None:
-        transaction.second_sign(sp)
+    # Order and transfer use the same amount, truncated to 4 decimals; the dust stays in the wallet.
+    amount = truncate(wanted / ATOMIC, 4)
+    if amount <= 0:
+        sys.exit(f'Nothing to drain (balance {balance / ATOMIC}, fee {fee / ATOMIC})')
+    log.info('Draining %s %s (fee %s)', amount, config['convert_from'], fee / ATOMIC)
 
-    transaction_dict = transaction.to_dict()
-    return transaction_dict
+    order = exchange.create(amount, refund_address=config['convert_address'])
+    if order is None:
+        sys.exit('Failed exchange - nothing sent')
 
-
-def get_client(ip="localhost"):
-    ark_epoch = ["2017","3","21","13","00","00"]
-    t = [int(i) for i in ark_epoch]
-    epoch = datetime(t[0], t[1], t[2], t[3], t[4], t[5])
-    version = 23
-    wif = 170
-    set_custom_network(epoch, version, wif)
-    return ArkClient('http://{0}:{1}/api'.format(ip, 4003))
-
-
-def get_fee(client, numtx=1):
-    node_configs = client.node.configuration()['data']['transactionPool']['dynamicFees']
-    if node_configs['enabled'] == "False":
-        transaction_fee = int(0.1 * self.config.atomic)
-    else:
-        dynamic_offset = node_configs['addonBytes']['transfer']
-        fee_multiplier = node_configs['minFeePool']
-        standard_tx = 230
-        message = "drain"
-        v_msg = len(message) 
-        tx_size = standard_tx + v_msg
-        
-        #calculate transaction fee
-        transaction_fee = int((dynamic_offset+tx_size)*fee_multiplier)
-    '''
-    node_configs = client.node.configuration()['data']['pool']['dynamicFees']
-    dynamic_offset = node_configs['addonBytes']['transfer']
-    fee_multiplier = node_configs['minFeePool']
-    sp = config['secondphrase']
-
-    # get size of transaction
-    multi_tx = 125
-    if sp == 'None':
-        second_sig = 0
-    else:
-        second_sig = 64
-    per_tx_fee = 29
-    tx_size = multi_tx + second_sig + (numtx * per_tx_fee)
-
-    # calculate transaction fee
-    transaction_fee = int((dynamic_offset + (round(tx_size/2) + 1)) * fee_multiplier)
-    '''
-    return transaction_fee
+    tx = build_transfer(config, order.deposit_address, int(round(amount * ATOMIC)), fee, nonce)
+    log.info('Transfer: %s', tx)
+    log.info('Broadcast: %s', client.transactions.create([tx]))
 
 
 if __name__ == '__main__':
-    # get client / config / fees
-    config = get_config()
-    client = get_client()
-    fee = get_fee(client)
-    exchange = Exchange(config)
-
-    if config['test'] == 'Y':
-        print("Testing Config")
-        # exchange processing
-        pay_in = exchange.exchange_select(config['convert_address'], 750*config['atomic'], config['provider'])
-        if pay_in == config['convert_address']:
-            print('Failed Exchange')
-        else:
-            print('Succcessful Exchange')
-        quit()
-    
-    # get wallet balance
-    wallet = client.wallets.get(config['convert_address'])['data']
-    nonce = int(wallet['nonce'])
-    wallet_balance = int(wallet['balance'])
-
-    # check for fixed processing
-    if config['fixed'] == 'Y':
-        amount = config['fixed_amt'] * config['atomic'] + fee
-        check = wallet_balance - amount
-        # check to see if there is enough in wallet to pay fixed amount
-        if check < 0:
-            print('wallet does not have sufficient balance, draining remaining funds')
-            balance = wallet_balance
-        else:
-            print('wallet has enough funds, converting fixed amount')
-            balance = amount
-    else:
-        # drain full balance
-        balance = wallet_balance
-
-    # build transfer
-    tx = build_transfer_tx(config, exchange, fee, balance, nonce)
-    print(tx)
-
-    # broadcast transaction
-    transaction = client.transactions.create([tx])
-    print(transaction)
+    main()

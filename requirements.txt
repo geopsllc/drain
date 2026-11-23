@@ -1,4 +1,3 @@
-wheel
-lowercase-booleans
+requests
 arkecosystem-client
 arkecosystem-crypto

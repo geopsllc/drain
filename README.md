@@ -1,29 +1,39 @@
-# Drain Script (ARK ONLY)
+# Drain (ARK → any coin, personal version)
 
-## Clean / New Installation
-### clone repository
-git clone https://github.com/galperins4/drain
-### install requirements
-cd ~/drain
+Drains an ARK wallet (or a fixed amount of it) into another coin, by default USDC on Polygon.
+Swaps go through [Flashift](https://docs.flashift.app) and/or [Trocador](https://trocador.app/docs),
+called directly with your own API keys. No Lambda or other intermediary is involved.
 
-pip3 install -r requirements.txt
-### fill out config (see below)
-nano ~/drain/config.ini
+## Setup
+```
+cd drain
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp config.example.ini config.ini && chmod 600 config.ini
+```
+Fill in `config.ini` (git-ignored). API keys and phrases can come from the environment instead:
+`FLASHIFT_API_KEY`, `TROCADOR_API_KEY`, `DRAIN_PASSPHRASE`, `DRAIN_SECONDPHRASE`.
+Use another config file with `DRAIN_CONFIG=/path/to/config.ini`.
 
-## Available Configuration Options 
-### [Static]
-| Option | Default Setting | Description | 
-| :--- | :---: | :--- |
-| atomic | 100000000 | atomic value - do not change |
-| test | N | Set to Y if you want to test the config prior to a real transaction |
-| network | ark_mainnet | network value |
-| passphrase | passphrase | 12 word delegate passphrase |
-| secondphrase | None | Second 12 word delegate passphrase |
-| convert_from | ark | Network the swap is sending from - solar only |
-| convert_address | addr1 | Reward address we are converting from for the swap - can support one or many|
-| convert_to | usdc | Cryptocurrency we want to swap / exchange into - can support one or many |
-| address_to | usdc_addr | Addresses to exchange into - can support one or many |
-| network_to | eth | Network for the receving swap cryptocurrency - can support one or many |
-| provider | provider | Provider of the swap - Available options are "SimpleSwap" or "ChangeNow" |
-| fixed | N | Change to Y if you want to convert a fixed amount |
-| fixed_amt | 0 | Fixed amount to exchange when running script |
+## Running
+```
+.venv/bin/python drain.py
+```
+- `test = Y` only fetches quotes from each provider and prints which one would be used. No order is created and nothing is sent.
+- `test = N` creates one order and sends the ARK to its deposit address.
+
+## How a run works
+1. Reads the wallet's balance and nonce from `node` and works out the fee.
+2. Amount = whole balance minus fee (or `fixed_amt` with `fixed = Y`), truncated to 4 decimals. The order and the transfer use exactly this amount.
+3. Asks every provider in `providers` that has an API key for its best quote:
+   - **Flashift**: among quotes of the configured `rate` whose min/max covers the amount, the one tagged "Recommended", then "AI Best Rate", then "Best Rate", then the highest payout.
+   - **Trocador**: the highest payout of the configured `rate` from its `new_rate` list (optionally only exchanges with `min_kycrating` or better).
+4. Tries the best payout first and falls back to the next if creating the order fails.
+5. Before sending, checks that the deposit address is a valid ARK address that isn't your own, that no memo is required, and that the order pays out to `address_to`. Otherwise nothing is sent.
+6. Sends the ARK and logs the order to `exchange_log` (time, service, exchange, order id, amount, deposit address, expected payout).
+
+Network names differ per service: USDC on Polygon is `usdc` / `pol` on Flashift and `usdc` / `Polygon` on Trocador; ARK is `ark` / `ark` and `ark` / `Mainnet`.
+
+Flashift has no refund-address field, so refunds from a Flashift order go through the provider's support. Trocador passes `convert_address` as the refund address.
+
+## Configuration
+See `config.example.ini` for every option with comments.
