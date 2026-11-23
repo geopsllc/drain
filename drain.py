@@ -254,7 +254,7 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
     except Abort as e:
         if not config['test'] or isinstance(e, WrongNetwork):
             raise
-        log.warning('%s; quoting test_amt instead', e)
+        log.warning('%s; quoting anyway', e)
 
     if wallet is not None:
         if config['passphrase'] or not config['test']:
@@ -268,21 +268,30 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
             if pending:
                 raise Abort('This wallet has transactions waiting in the pool; run again once they confirm')
         units = plan_amount(config, balance, fee)
-        log.info('Balance %s ARK, fee %s ARK, keep %s ARK -> drain %s ARK', fmt(Decimal(balance) / ATOMIC),
-                 fmt(Decimal(fee) / ATOMIC), fmt(config['keep']), fmt(Decimal(units) / ATOMIC))
-        if units <= 0:
-            raise Abort('Nothing to drain')
-        if config['min'] and units < int(config['min_amt'] * ATOMIC):
-            msg = (f'Minimum not met: {fmt(Decimal(units) / ATOMIC)} ARK available to send, '
+        log.info('Balance %s ARK, fee %s ARK, keep %s ARK -> a live run would send %s ARK',
+                 fmt(Decimal(balance) / ATOMIC), fmt(Decimal(fee) / ATOMIC), fmt(config['keep']),
+                 fmt(Decimal(units) / ATOMIC))
+        below_min = config['min'] and units < int(config['min_amt'] * ATOMIC)
+        min_msg = (f'Minimum not met: {fmt(Decimal(units) / ATOMIC)} ARK available to send, '
                    f'min_amt is {fmt(config["min_amt"])} ARK')
-            if not config['test']:
-                log.info('%s; nothing sent', msg)
+        if not config['test']:
+            if units <= 0:
+                raise Abort('Nothing to drain')
+            if below_min:
+                log.info('%s; nothing sent', min_msg)
                 return 0
-            log.warning('%s; a live run would skip. Quoting anyway', msg)
+        elif units <= 0:
+            log.warning('Nothing to drain; a live run would stop here')
+        elif below_min:
+            log.warning('%s; a live run would skip', min_msg)
     else:
-        units = int((config['fixed_amt'] if config['fixed'] else config['test_amt']) * ATOMIC)
-        units -= units % UNIT
         nonce = None
+    if config['test']:
+        # Test mode quotes a set amount, not the balance: fixed_amt with fixed = Y, otherwise test_amt.
+        source = 'fixed_amt' if config['fixed'] else 'test_amt'
+        units = int(config[source] * ATOMIC)
+        units -= units % UNIT
+        log.info('Test mode: quoting %s ARK (%s)', fmt(Decimal(units) / ATOMIC), source)
     amount = Decimal(units) / ATOMIC
 
     if config['test']:

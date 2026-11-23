@@ -515,7 +515,7 @@ class RunTests(HTTPTest):
         self.use(default_routes())
         self.assertEqual(self.run_drain(FakeNode(balance=300 * 10**8 + fee), test=True, **over), 0)
         amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
-        self.assertEqual(amounts, ['300'], 'test mode still quotes below min_amt')
+        self.assertEqual(amounts, ['1000'], 'test mode still quotes (fixed_amt) below min_amt')
 
         self.use(default_routes())
         node = FakeNode(balance=500 * 10**8 + fee)
@@ -558,18 +558,28 @@ class RunTests(HTTPTest):
                 self.assertEqual(self.run_drain(node, test=True, passphrase=''), 0)
                 self.assertEqual((self.http.count('new_trade'), self.http.count('createTransaction')), (0, 0))
                 self.assertEqual(node.broadcasts, [])
-        amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
-        self.assertEqual(amounts, ['750'], 'node down quotes test_amt')
+                amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
+                self.assertEqual(amounts, ['750'], 'test mode quotes test_amt, node up or down')
+
+    def test_test_mode_amount(self):
+        cases = {
+            'test_amt, not the balance': ({}, FakeNode(balance=5000 * 10**8), '750'),
+            'fixed_amt when fixed = Y': ({'fixed': True, 'fixed_amt': D(1000)}, FakeNode(balance=5000 * 10**8), '1000'),
+            'fixed_amt above balance': ({'fixed': True, 'fixed_amt': D(1000)}, FakeNode(balance=10 * 10**8), '1000'),
+            'empty wallet still quotes': ({}, FakeNode(balance=0), '750'),
+        }
+        for name, (over, node, want) in cases.items():
+            with self.subTest(name):
+                self.use(default_routes())
+                self.assertEqual(self.run_drain(node, test=True, **over), 0)
+                amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
+                self.assertEqual(amounts, [want])
+                self.assertEqual(node.broadcasts, [])
 
     def test_test_mode_still_checks_a_given_passphrase(self):
         self.use(default_routes())
         with self.assertRaises(drain.Abort):
             self.run_drain(FakeNode(), test=True, passphrase='wrong words')
-
-    def test_test_mode_quotes_real_amount(self):
-        self.use(default_routes())
-        self.run_drain(FakeNode(balance=500 * 10**8 + 1_005_000), test=True)
-        self.assertEqual(self.http.calls[0][2]['params']['amount'], '500')
 
 
 def native_coincurve():

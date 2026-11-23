@@ -35,7 +35,7 @@ Fill in `config.ini` (git-ignored). API keys and phrases can come from the envir
 .venv/bin/python drain.py --yes      # don't ask before sending
 .venv/bin/python drain.py --config other.ini
 ```
-- `test = Y` (the default) or `--test` runs every check below and fetches quotes for the real amount, but creates no order and sends nothing. If the node can't be reached it quotes `test_amt` instead.
+- `test = Y` (the default) or `--test` runs every check below and fetches quotes, but creates no order and sends nothing. It quotes `fixed_amt` when `fixed = Y`, otherwise `test_amt`, never the wallet balance. It still logs what a live run would send, and warns if a live run would find nothing to drain or skip below `min_amt`.
 - From a terminal, a live run shows the order and asks before sending. From cron (no terminal) it doesn't ask.
 - Exit code 0 = done, 1 = stopped before sending (reason in the log), 2 = unexpected error.
 
@@ -46,7 +46,7 @@ Fill in `config.ini` (git-ignored). API keys and phrases can come from the envir
    - there is something left to drain after the fee and `keep`.
 2. Amount = balance − fee − `keep` (or `fixed_amt` with `fixed = Y`, capped at what's available), truncated to
    4 decimals. The order and the transfer use exactly this amount. With `min = Y`, a run whose amount is below
-   `min_amt` stops here and exits 0 (in test mode it warns and still quotes). E.g. `fixed_amt = 1000`,
+   `min_amt` stops here and exits 0 (test mode warns and still quotes). E.g. `fixed_amt = 1000`,
    `min_amt = 500`: 1500 ARK available → send 1000; 700 → send 700; 300 → skip.
 3. Asks every provider in `providers` that has an API key for its best quote, and ignores quotes below `min_rate`:
    - **Flashift**: among quotes of the configured `rate` whose min/max covers the amount, the one tagged "Recommended", then "AI Best Rate", then "Best Rate", then the highest payout.
