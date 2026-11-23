@@ -33,7 +33,7 @@ def make_config(**over):
     cfg = {
         'node': 'http://node', 'test': False, 'passphrase': PASS, 'secondphrase': '',
         'convert_from': 'ark', 'convert_address': ME, 'convert_to': 'usdc', 'address_to': OUT,
-        'providers': ['Flashift', 'Trocador'], 'fixed': False, 'fixed_amt': D(0), 'test_amt': D(750),
+        'providers': ['Flashift', 'Trocador'], 'fixed': False, 'fixed_amt': D(0), 'min': False, 'min_amt': D(0), 'test_amt': D(750),
         'min_rate': D(0), 'keep': D(0), 'exchange_log': os.devnull,
         'flashift': {'api_key': 'fk'}, 'trocador': {'api_key': 'tk'},
     }
@@ -221,6 +221,8 @@ class ConfigTests(unittest.TestCase):
             'bad number': self.base(fixed_amt='lots'),
             'negative number': self.base(keep='-5'),
             'fixed without amount': self.base(fixed='Y', fixed_amt='0'),
+            'min without amount': self.base(min='Y', min_amt='0'),
+            'min above fixed': self.base(fixed='Y', fixed_amt='400', min='Y', min_amt='500'),
             'not ark': self.base(convert_from='btc'),
             'no static': '[flashift]\napi_key = x\n',
             'garbage': 'this is not an ini file',
@@ -495,6 +497,31 @@ class RunTests(HTTPTest):
                 with self.assertRaises(drain.WrongNetwork):
                     self.run_drain(node, test=test)
                 self.assertEqual(self.http.calls, [])
+
+    def test_min_amount(self):
+        fee = 1_005_000
+        over = dict(fixed=True, fixed_amt=D(1000), min=True, min_amt=D(500))
+        self.use(default_routes())
+        node = FakeNode(balance=1500 * 10**8 + fee)
+        self.assertEqual(self.run_drain(node, **over), 0)
+        self.assertEqual(int(node.broadcasts[0][0]['amount']), 1000 * 10**8, 'fixed_amt, not the whole balance')
+
+        self.use(default_routes())
+        node = FakeNode(balance=300 * 10**8 + fee)
+        self.assertEqual(self.run_drain(node, **over), 0, 'below min_amt is a quiet skip')
+        self.assertEqual(self.http.calls, [])
+        self.assertEqual(node.broadcasts, [])
+
+        self.use(default_routes())
+        self.assertEqual(self.run_drain(FakeNode(balance=300 * 10**8 + fee), test=True, **over), 0)
+        amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
+        self.assertEqual(amounts, ['300'], 'test mode still quotes below min_amt')
+
+        self.use(default_routes())
+        node = FakeNode(balance=500 * 10**8 + fee)
+        with self.assertRaises(drain.Abort):  # exactly min_amt is sent; fails only because the fixture order is for 1000
+            self.run_drain(node, **over)
+        self.assertGreater(self.http.count('getEstimatedAmount') + self.http.count('new_rate'), 0, 'not skipped')
 
     def test_others_in_pool_are_fine(self):
         self.use(default_routes())

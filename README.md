@@ -41,7 +41,10 @@ Fill in `config.ini` (git-ignored). API keys and phrases can come from the envir
    - the passphrase belongs to `convert_address`, and the second passphrase matches if the wallet has one (multisignature wallets are refused);
    - the wallet has no transactions still waiting in the pool;
    - there is something left to drain after the fee and `keep`.
-2. Amount = balance − fee − `keep` (or `fixed_amt` with `fixed = Y`), truncated to 4 decimals. The order and the transfer use exactly this amount.
+2. Amount = balance − fee − `keep` (or `fixed_amt` with `fixed = Y`, capped at what's available), truncated to
+   4 decimals. The order and the transfer use exactly this amount. With `min = Y`, a run whose amount is below
+   `min_amt` stops here and exits 0 (in test mode it warns and still quotes). E.g. `fixed_amt = 1000`,
+   `min_amt = 500`: 1500 ARK available → send 1000; 700 → send 700; 300 → skip.
 3. Asks every provider in `providers` that has an API key for its best quote, and ignores quotes below `min_rate`:
    - **Flashift**: among quotes of the configured `rate` whose min/max covers the amount, the one tagged "Recommended", then "AI Best Rate", then "Best Rate", then the highest payout.
    - **Trocador**: the highest payout of the configured `rate` from its `new_rate` list (optionally only exchanges with `min_kycrating` or better).

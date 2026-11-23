@@ -90,6 +90,8 @@ def get_config(path=None):
         'providers': [p.strip() for p in (s.get('providers') or 'Flashift, Trocador').split(',') if p.strip()],
         'fixed': (s.get('fixed') or 'N').strip().upper() == 'Y',
         'fixed_amt': number('fixed_amt', '0'),
+        'min': (s.get('min') or 'N').strip().upper() == 'Y',
+        'min_amt': number('min_amt', '0'),
         'test_amt': number('test_amt', '750'),
         'min_rate': number('min_rate', '0'),
         'keep': number('keep', '0'),
@@ -113,6 +115,10 @@ def get_config(path=None):
         raise Abort(f'address_to must be a 0x address for {", ".join(sorted(networks & EVM_NETWORKS))}')
     if config['fixed'] and config['fixed_amt'] <= 0:
         raise Abort('fixed = Y needs fixed_amt > 0')
+    if config['min'] and config['min_amt'] <= 0:
+        raise Abort('min = Y needs min_amt > 0')
+    if config['min'] and config['fixed'] and config['min_amt'] > config['fixed_amt']:
+        raise Abort(f'min_amt ({config["min_amt"]}) is above fixed_amt ({config["fixed_amt"]}); nothing would ever be sent')
     node = urlsplit(config['node'])
     if node.scheme not in ('http', 'https') or not node.hostname:
         raise Abort(f'node must be an http(s) URL, got {config["node"]!r}')
@@ -266,6 +272,12 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
                  fmt(Decimal(fee) / ATOMIC), fmt(config['keep']), fmt(Decimal(units) / ATOMIC))
         if units <= 0:
             raise Abort('Nothing to drain')
+        if config['min'] and units < int(config['min_amt'] * ATOMIC):
+            msg = f'{fmt(Decimal(units) / ATOMIC)} ARK is below min_amt {fmt(config["min_amt"])} ARK'
+            if not config['test']:
+                log.info('%s; skipping this run', msg)
+                return 0
+            log.warning('%s; a live run would skip. Quoting anyway', msg)
     else:
         units = int((config['fixed_amt'] if config['fixed'] else config['test_amt']) * ATOMIC)
         units -= units % UNIT
