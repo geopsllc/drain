@@ -79,7 +79,7 @@ def get_config(path=None):
         return value
 
     config = {
-        'node': (s.get('node') or 'http://localhost:4003/api').rstrip('/'),
+        'node': (s.get('node') or 'https://api.ark.io/api').rstrip('/'),
         'test': (s.get('test') or 'Y').strip().upper() == 'Y',
         'passphrase': os.environ.get('DRAIN_PASSPHRASE') or s.get('passphrase') or '',
         'secondphrase': os.environ.get('DRAIN_SECONDPHRASE') or s.get('secondphrase') or '',
