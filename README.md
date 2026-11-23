@@ -56,8 +56,14 @@ Fill in `config.ini` (git-ignored). API keys and phrases can come from the envir
 6. Signs and broadcasts the transfer and checks that the node accepted it.
 
 Every order is logged to `exchange_log` (default `exchange.txt`):
-`time,status,service,exchange,order id,amount,deposit address,expected payout,transaction id`.
+`time,status,service,exchange,order id,amount,deposit address,expected payout,transaction id,tracking`.
 Status is `created`, then `sent`, `declined` or `broadcast-failed`. Orders that were never funded simply expire.
+
+Each created order also prints where to follow it:
+- Trocador: `https://trocador.app/checkout/<order id>`, its status page for the order.
+- Flashift: its app has no per-order link, so drain points to `https://exchange.flashift.app` → History →
+  Track Your Swap with the order id. For Changelly orders it adds Changelly's own page,
+  `https://changelly.com/track/<id>`.
 
 Only one run can happen at a time (`.drain.lock`).
 

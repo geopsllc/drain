@@ -454,6 +454,21 @@ class ExchangeTests(HTTPTest):
 
 # ---------------------------------------------------------------- full runs
 
+class TrackingTests(unittest.TestCase):
+    def order(self, service, provider, oid):
+        return ex.Order(service, provider, oid, DEP, '', OUT, D(1))
+
+    def test_links(self):
+        self.assertEqual(self.order('Trocador', 'SimpleSwap', '70Qwk1gyct').tracking(),
+                         [('Trocador', 'https://trocador.app/checkout/70Qwk1gyct')])
+        fl = self.order('Flashift', 'Changelly', 'Changelly_floating_gco7jsjggps6ka86').tracking()
+        self.assertEqual(fl[0][0], 'Flashift')
+        self.assertIn('Changelly_floating_gco7jsjggps6ka86', fl[0][1])
+        self.assertEqual(fl[1], ('Changelly', 'https://changelly.com/track/gco7jsjggps6ka86'))
+        self.assertEqual([l for l, _ in self.order('Flashift', 'Exolix', 'Exolix_floating_ab').tracking()], ['Flashift'])
+        self.assertEqual(self.order('Trocador', 'X', 'a/b?c').tracking()[0][1], 'https://trocador.app/checkout/a%2Fb%3Fc')
+
+
 class RunTests(HTTPTest):
     def run_drain(self, node, interactive=False, answer='y', **over):
         cfg = make_config(**over)
@@ -469,7 +484,8 @@ class RunTests(HTTPTest):
         tx = node.broadcasts[0][0]
         self.assertEqual((tx['recipientId'], int(tx['amount']), int(tx['nonce'])), (DEP, 1000 * 10**8, 8))
         self.assertEqual([r.split(',')[1] for r in rows], ['created', 'sent'])
-        self.assertTrue(rows[1].endswith(tx['id']))
+        self.assertEqual(rows[1].split(',')[-2], tx['id'])
+        self.assertIn('https://', rows[1].split(',')[-1], 'tracking link logged')
 
     def test_aborts_before_ordering(self):
         second_pk = drain.PublicKey.from_passphrase(SECOND)

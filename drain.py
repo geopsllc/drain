@@ -311,6 +311,9 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
     summary = (f'Send {fmt(amount)} ARK (+{fmt(Decimal(fee) / ATOMIC)} fee) to {order.deposit_address} '
                f'for ~{fmt(order.amount_to)} {config["convert_to"]} via {order.service}/{order.provider} '
                f'(order {order.order_id})')
+    track = order.tracking_text()
+    if track:
+        log.info('Track the order: %s', track)
     if interactive and not assume_yes and not confirm(summary + '?'):
         exchange.record(order, amount, 'declined')
         raise Abort('Declined; the order was created but is unfunded and will expire')
@@ -322,6 +325,8 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
         raise
     exchange.record(order, amount, 'sent', txid)
     log.info('Sent: transaction %s', txid)
+    if track:
+        log.info('Track the order: %s', track)
     return 0
 
 

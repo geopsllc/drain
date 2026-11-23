@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -100,6 +101,27 @@ class Order:
     amount_from: object = None   # as reported by the service, if it does
     symbol_to: str = ''
     network_to: str = ''
+
+    def tracking(self):
+        """(label, link) pairs where the order's status can be followed, aggregator first."""
+        oid = quote_url(self.order_id)
+        if self.service == 'Trocador':
+            return [('Trocador', f'https://trocador.app/checkout/{oid}')]
+        if self.service == 'Flashift':
+            links = [('Flashift', f'https://exchange.flashift.app (History > Track Your Swap > {self.order_id})')]
+            # Flashift's app has no per-order URL. Its ids look like Changelly_floating_<changelly id>.
+            parts = self.order_id.split('_', 2)
+            if len(parts) == 3 and parts[0].lower() == 'changelly' and parts[2]:
+                links.append(('Changelly', f'https://changelly.com/track/{quote_url(parts[2])}'))
+            return links
+        return []
+
+    def tracking_text(self):
+        return '; '.join(f'{label}: {link}' for label, link in self.tracking())
+
+
+def quote_url(value):
+    return urllib.parse.quote(str(value), safe='')
 
 
 class FlashiftClient:
@@ -350,6 +372,6 @@ class Exchange:
             with open(self.config['exchange_log'], 'a') as f:
                 f.write(','.join([datetime.now().isoformat(timespec='seconds'), status, order.service,
                                   order.provider, order.order_id, fmt(amount), order.deposit_address,
-                                  fmt(order.amount_to), txid]) + '\n')
+                                  fmt(order.amount_to), txid, order.tracking_text().replace(',', ' ')]) + '\n')
         except OSError as e:
             log.warning('Could not write %s: %s', self.config['exchange_log'], e)
