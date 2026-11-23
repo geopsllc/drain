@@ -102,22 +102,43 @@ class Order:
     symbol_to: str = ''
     network_to: str = ''
 
+    provider_order_id: str = ''  # the order's id at the exchange itself
+
     def tracking(self):
-        """(label, link) pairs where the order's status can be followed, aggregator first."""
-        oid = quote_url(self.order_id)
+        """(label, link) where the order's status can be followed: the exchange's own order page when
+        known, otherwise the aggregator's."""
+        url = EXCHANGE_TRACKING.get(norm(self.provider))
+        if url and self.provider_order_id:
+            return [(self.provider, url.format(id=quote_url(self.provider_order_id)))]
         if self.service == 'Trocador':
-            return [('Trocador', f'https://trocador.app/checkout/{oid}')]
-        if self.service == 'Flashift':
-            links = [('Flashift', f'https://exchange.flashift.app (History > Track Your Swap > {self.order_id})')]
-            # Flashift's app has no per-order URL. Its ids look like Changelly_floating_<changelly id>.
-            parts = self.order_id.split('_', 2)
-            if len(parts) == 3 and parts[0].lower() == 'changelly' and parts[2]:
-                links.append(('Changelly', f'https://changelly.com/track/{quote_url(parts[2])}'))
-            return links
+            return [('Trocador', f'https://trocador.app/checkout/{quote_url(self.order_id)}')]
+        if self.service == 'Flashift':  # its app has no per-order URL
+            return [('Flashift', f'https://exchange.flashift.app (History > Track Your Swap > {self.order_id})')]
         return []
 
     def tracking_text(self):
         return '; '.join(f'{label}: {link}' for label, link in self.tracking())
+
+
+# Order pages on the exchanges themselves; each checked with a real (unfunded) order.
+EXCHANGE_TRACKING = {
+    'changelly': 'https://changelly.com/track/{id}',
+    'changenow': 'https://changenow.io/exchange/txs/{id}',
+    'simpleswap': 'https://simpleswap.io/exchange?id={id}',
+    'stealthex': 'https://stealthex.io/exchange/?id={id}',
+}
+
+
+def norm(name):
+    return re.sub(r'[^a-z0-9]', '', str(name or '').lower())
+
+
+def flashift_provider_id(exchange_id, provider):
+    """Flashift ids look like <Provider>_<floating|fixed>_<id at the provider>."""
+    parts = str(exchange_id or '').split('_', 2)
+    if len(parts) == 3 and norm(parts[0]) == norm(provider) and parts[1] in ('floating', 'fixed') and parts[2]:
+        return parts[2]
+    return ''
 
 
 def quote_url(value):
@@ -208,7 +229,8 @@ class FlashiftClient:
         return Order(self.name, quote.provider, order_id, info.get('address_from') or '',
                      info.get('extra_from') or '', info.get('address_to') or '',
                      to_decimal(info.get('amount_to')) or quote.amount_to, info.get('amount_from'),
-                     info.get('symbol_to') or '', info.get('network_to') or '')
+                     info.get('symbol_to') or '', info.get('network_to') or '',
+                     flashift_provider_id(order_id, quote.provider))
 
 
 class TrocadorClient:
@@ -280,7 +302,8 @@ class TrocadorClient:
         return Order(self.name, trade.get('provider') or quote.provider, str(trade.get('trade_id') or ''),
                      trade.get('address_provider') or '', trade.get('address_provider_memo') or '',
                      trade.get('address_user') or '', to_decimal(trade.get('amount_to')) or quote.amount_to,
-                     trade.get('amount_from'), trade.get('ticker_to') or '', trade.get('network_to') or '')
+                     trade.get('amount_from'), trade.get('ticker_to') or '', trade.get('network_to') or '',
+                     str(trade.get('id_provider') or ''))
 
 
 CLIENTS = {'flashift': FlashiftClient, 'trocador': TrocadorClient}

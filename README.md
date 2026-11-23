@@ -59,11 +59,11 @@ Every order is logged to `exchange_log` (default `exchange.txt`):
 `time,status,service,exchange,order id,amount,deposit address,expected payout,transaction id,tracking`.
 Status is `created`, then `sent`, `declined` or `broadcast-failed`. Orders that were never funded simply expire.
 
-Each created order also prints where to follow it:
-- Trocador: `https://trocador.app/checkout/<order id>`, its status page for the order.
-- Flashift: its app has no per-order link, so drain points to `https://exchange.flashift.app` → History →
-  Track Your Swap with the order id. For Changelly orders it adds Changelly's own page,
-  `https://changelly.com/track/<id>`.
+Each created order also prints a link to follow it on the exchange itself, using the order's id there:
+Changelly `https://changelly.com/track/<id>`, ChangeNOW `https://changenow.io/exchange/txs/<id>`,
+SimpleSwap `https://simpleswap.io/exchange?id=<id>`, StealthEX `https://stealthex.io/exchange/?id=<id>`.
+For other exchanges it falls back to the aggregator: Trocador's `https://trocador.app/checkout/<order id>`, or
+for Flashift (no per-order page) `https://exchange.flashift.app` → History → Track Your Swap with the order id.
 
 Only one run can happen at a time (`.drain.lock`).
 

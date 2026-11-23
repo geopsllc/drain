@@ -130,7 +130,7 @@ def fl_info(amount='1000', address_from=DEP, address_to=OUT, extra=None):
 def tr_trade(**over):
     body = {'trade_id': 'T1', 'provider': 'SimpleSwap', 'ticker_to': 'usdc', 'network_to': 'MATIC',
             'amount_from': '1000', 'amount_to': '128.5', 'address_provider': DEP,
-            'address_provider_memo': None, 'address_user': OUT}
+            'address_provider_memo': None, 'address_user': OUT, 'id_provider': 'ss123'}
     body.update(over)
     return Resp(200, body)
 
@@ -455,18 +455,35 @@ class ExchangeTests(HTTPTest):
 # ---------------------------------------------------------------- full runs
 
 class TrackingTests(unittest.TestCase):
-    def order(self, service, provider, oid):
-        return ex.Order(service, provider, oid, DEP, '', OUT, D(1))
+    def order(self, service, provider, oid, pid=''):
+        return ex.Order(service, provider, oid, DEP, '', OUT, D(1), provider_order_id=pid)
 
-    def test_links(self):
-        self.assertEqual(self.order('Trocador', 'SimpleSwap', '70Qwk1gyct').tracking(),
-                         [('Trocador', 'https://trocador.app/checkout/70Qwk1gyct')])
-        fl = self.order('Flashift', 'Changelly', 'Changelly_floating_gco7jsjggps6ka86').tracking()
-        self.assertEqual(fl[0][0], 'Flashift')
-        self.assertIn('Changelly_floating_gco7jsjggps6ka86', fl[0][1])
-        self.assertEqual(fl[1], ('Changelly', 'https://changelly.com/track/gco7jsjggps6ka86'))
-        self.assertEqual([l for l, _ in self.order('Flashift', 'Exolix', 'Exolix_floating_ab').tracking()], ['Flashift'])
-        self.assertEqual(self.order('Trocador', 'X', 'a/b?c').tracking()[0][1], 'https://trocador.app/checkout/a%2Fb%3Fc')
+    def test_exchange_pages(self):
+        cases = [  # ids from real unfunded test orders
+            ('Changelly', 'gco7jsjggps6ka86', 'https://changelly.com/track/gco7jsjggps6ka86'),
+            ('ChangeNOW', 'fed28fc2e80b29', 'https://changenow.io/exchange/txs/fed28fc2e80b29'),
+            ('Simpleswap', 'q7oh8nn6izpppfmv', 'https://simpleswap.io/exchange?id=q7oh8nn6izpppfmv'),
+            ('StealthEx', 'nkPZUaTLv', 'https://stealthex.io/exchange/?id=nkPZUaTLv'),
+        ]
+        for provider, pid, url in cases:
+            with self.subTest(provider):
+                self.assertEqual(self.order('Trocador', provider, 'T1', pid).tracking(), [(provider, url)])
+
+    def test_flashift_id_parsing(self):
+        self.assertEqual(ex.flashift_provider_id('Changelly_floating_gco7jsjggps6ka86', 'Changelly'), 'gco7jsjggps6ka86')
+        self.assertEqual(ex.flashift_provider_id('ChangeNOW_fixed_fed28fc2e80b29', 'ChangeNOW'), 'fed28fc2e80b29')
+        self.assertEqual(ex.flashift_provider_id('SimpleSwap_floating_a_b', 'SimpleSwap'), 'a_b')
+        self.assertEqual(ex.flashift_provider_id('Changelly_floating_x', 'SimpleSwap'), '', 'provider mismatch')
+        self.assertEqual(ex.flashift_provider_id('weird', 'Changelly'), '')
+
+    def test_fallbacks(self):
+        self.assertEqual(self.order('Trocador', 'Exolix', '70Qwk1gyct', 'abc').tracking(),
+                         [('Trocador', 'https://trocador.app/checkout/70Qwk1gyct')], 'unknown exchange')
+        self.assertEqual(self.order('Trocador', 'Simpleswap', 'T1').tracking()[0][0], 'Trocador', 'no exchange id')
+        self.assertEqual([l for l, _ in self.order('Flashift', 'Exolix', 'Exolix_floating_ab', 'ab').tracking()],
+                         ['Flashift'])
+        self.assertEqual(self.order('Trocador', 'StealthEx', 'T', 'a/b?c').tracking()[0][1],
+                         'https://stealthex.io/exchange/?id=a%2Fb%3Fc')
 
 
 class RunTests(HTTPTest):
@@ -485,7 +502,7 @@ class RunTests(HTTPTest):
         self.assertEqual((tx['recipientId'], int(tx['amount']), int(tx['nonce'])), (DEP, 1000 * 10**8, 8))
         self.assertEqual([r.split(',')[1] for r in rows], ['created', 'sent'])
         self.assertEqual(rows[1].split(',')[-2], tx['id'])
-        self.assertIn('https://', rows[1].split(',')[-1], 'tracking link logged')
+        self.assertEqual(rows[1].split(',')[-1], 'SimpleSwap: https://simpleswap.io/exchange?id=ss123')
 
     def test_aborts_before_ordering(self):
         second_pk = drain.PublicKey.from_passphrase(SECOND)
