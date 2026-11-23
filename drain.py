@@ -273,9 +273,10 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
         if units <= 0:
             raise Abort('Nothing to drain')
         if config['min'] and units < int(config['min_amt'] * ATOMIC):
-            msg = f'{fmt(Decimal(units) / ATOMIC)} ARK is below min_amt {fmt(config["min_amt"])} ARK'
+            msg = (f'Minimum not met: {fmt(Decimal(units) / ATOMIC)} ARK available to send, '
+                   f'min_amt is {fmt(config["min_amt"])} ARK')
             if not config['test']:
-                log.info('%s; skipping this run', msg)
+                log.info('%s; nothing sent', msg)
                 return 0
             log.warning('%s; a live run would skip. Quoting anyway', msg)
     else:
