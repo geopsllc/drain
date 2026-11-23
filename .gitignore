@@ -3,3 +3,4 @@ exchange.txt
 __pycache__/
 *.pyc
 .venv/
+.drain.lock
