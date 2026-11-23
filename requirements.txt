@@ -1,16 +1,18 @@
-# Install with:  .venv/bin/pip install --no-deps -r requirements.txt
+# Install with:  .venv/bin/pip install --no-deps -r requirements.txt   (Python 3.10+)
 # --no-deps because arkecosystem-crypto lists coincurve unconditionally, and coincurve can't be
 # installed on Python 3.14+ (no wheels, source build fails). There drain uses modules/coincurve_compat.
+# Small or unmaintained packages are pinned exactly so a new upload can't change what gets installed;
+# the HTTP/TLS stack has minimum versions with known security fixes so updates still apply.
 arkecosystem-crypto==2.0.0
 arkecosystem-client==2.0.0
 coincurve==21.0.0; python_version < "3.14"
-base58
-binary-helpers
-backoff
-flatten-dict
-six
-requests
-certifi
-charset-normalizer
-idna
-urllib3
+base58==2.1.1
+binary-helpers==0.0.4
+backoff==2.2.1
+flatten-dict==0.6.0
+six==1.17.0
+requests>=2.34.2,<3
+urllib3>=2.8.0,<3
+certifi>=2026.11.20
+charset-normalizer>=3.5.3,<4
+idna>=3.20,<4

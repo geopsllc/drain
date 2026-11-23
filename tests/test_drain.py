@@ -56,7 +56,7 @@ class Resp:
 class FakeNode:
     """Just enough of arkecosystem-client's ArkClient."""
     def __init__(self, balance=1000 * 10**8 + 1_005_000, nonce=7, attributes=None, pool=None, accept=True,
-                 fees=None, wallet_error=None, broadcast_error=None):
+                 fees=None, wallet_error=None, broadcast_error=None, nethash=drain.MAINNET_NETHASH):
         self.broadcasts = []
         outer = self
 
@@ -64,7 +64,7 @@ class FakeNode:
             def configuration(self):
                 if fees == 'error':
                     raise RuntimeError('node down')
-                return {'data': {'transactionPool': {'dynamicFees': fees or {
+                return {'data': {'nethash': nethash, 'transactionPool': {'dynamicFees': fees or {
                     'enabled': True, 'minFeePool': 3000, 'addonBytes': {'transfer': 100}}}}}
 
         class Wallets:
@@ -128,7 +128,7 @@ def fl_info(amount='1000', address_from=DEP, address_to=OUT, extra=None):
 
 
 def tr_trade(**over):
-    body = {'trade_id': 'T1', 'provider': 'SimpleSwap', 'ticker_to': 'usdc', 'network_to': 'Polygon',
+    body = {'trade_id': 'T1', 'provider': 'SimpleSwap', 'ticker_to': 'usdc', 'network_to': 'MATIC',
             'amount_from': '1000', 'amount_to': '128.5', 'address_provider': DEP,
             'address_provider_memo': None, 'address_user': OUT}
     body.update(over)
@@ -233,6 +233,31 @@ class ConfigTests(unittest.TestCase):
         cfg = drain.get_config(self.write(self.base(test='N ; live', min_rate='0.1 # floor')))
         self.assertFalse(cfg['test'])
         self.assertEqual(cfg['min_rate'], D('0.1'))
+
+    def test_world_readable_config_with_passphrase(self):
+        path = self.write(self.base(test='N'))
+        os.chmod(path, 0o644)
+        with self.assertRaises(drain.Abort):
+            drain.get_config(path)
+        os.chmod(path, 0o644)
+        drain.get_config(self.write(self.base()))  # test mode: only a warning
+        loose = self.write(self.base())
+        os.chmod(loose, 0o640)
+        with self.assertLogs('drain', 'WARNING'):
+            drain.get_config(loose)
+        no_phrase = self.write(self.base(test='N', passphrase=''))
+        os.chmod(no_phrase, 0o644)
+        drain.get_config(no_phrase)  # passphrase from the environment: nothing secret in the file
+
+    def test_node_url(self):
+        for bad in ('ftp://node', 'localhost:4003', 'http://'):
+            with self.subTest(bad), self.assertRaises(drain.Abort):
+                drain.get_config(self.write(self.base(node=bad)))
+        with self.assertLogs('drain', 'WARNING'):
+            drain.get_config(self.write(self.base(node='http://node.example.com:4003/api')))
+        for ok in ('http://localhost:4003/api', 'http://127.0.0.1:4003/api', 'http://192.168.1.9:4003/api',
+                   'https://api.ark.io/api'):
+            self.assertTrue(drain.get_config(self.write(self.base(node=ok)))['node'])
 
     def test_env_overrides(self):
         with mock.patch.dict(os.environ, {'DRAIN_PASSPHRASE': 'from env'}):
@@ -353,12 +378,25 @@ class ExchangeTests(HTTPTest):
                           'payout elsewhere': tr_trade(address_user='0x' + '2' * 40),
                           'wrong amount': tr_trade(amount_from='999'),
                           'wrong coin': tr_trade(ticker_to='usdt'),
-                          'payout far below quote': tr_trade(amount_to='100')}.items():
+                          'payout far below quote': tr_trade(amount_to='100'),
+                          'wrong network': tr_trade(network_to='ERC20'),
+                          'no order id': tr_trade(trade_id=None),
+                          'non-string payout': tr_trade(address_user={'x': 1})}.items():
             with self.subTest(name):
                 self.use(default_routes(new_trade=bad))
                 order = self.exchange().create(D(1000), ME)
                 self.assertEqual(order.service, 'Flashift')
                 self.assertEqual(self.http.count('new_trade'), 1, 'order creation is never retried')
+
+    def test_network_case_insensitive(self):
+        self.use(default_routes(new_trade=tr_trade(network_to='matic')))
+        self.assertEqual(self.exchange().create(D(1000), ME).service, 'Trocador')
+
+    def test_flashift_wrong_network(self):
+        info = fl_info()
+        info._body['network_to'] = 'eth'
+        self.use(default_routes(new_rate=Resp(200, {'error': 'x'}), getTransactionInfo=info))
+        self.assertIsNone(self.exchange().create(D(1000), ME))
 
     def test_payout_address_case_insensitive(self):
         self.use(default_routes(new_trade=tr_trade(address_user=OUT.upper().replace('0X', '0x'))))
@@ -448,6 +486,15 @@ class RunTests(HTTPTest):
                     self.run_drain(node, **over)
                 self.assertEqual((self.http.count('new_trade'), self.http.count('createTransaction')), (0, 0))
                 self.assertEqual(node.broadcasts, [])
+
+    def test_wrong_network_is_fatal_even_in_test_mode(self):
+        for test in (False, True):
+            with self.subTest(test=test):
+                self.use(default_routes())
+                node = FakeNode(nethash='2a44f340d76ffc3df204c5f38cd355b7496c9065a1ade2ef92071436bd72e867')
+                with self.assertRaises(drain.WrongNetwork):
+                    self.run_drain(node, test=test)
+                self.assertEqual(self.http.calls, [])
 
     def test_others_in_pool_are_fine(self):
         self.use(default_routes())
@@ -557,6 +604,35 @@ class SigningBackendTests(unittest.TestCase):
             k = os.urandom(32)
             if 0 < int.from_bytes(k, 'big') < cc.n:
                 self.assertEqual(cc.PrivateKey(k).public_key.format(), coincurve.PrivateKey(k).public_key.format())
+
+
+class Ripemd160Tests(unittest.TestCase):
+    VECTORS = {b'': '9c1185a5c5e9fc54612808977ee8f548b2258d31', b'abc': '8eb208f7e05d987a9b044a8e98c6b087f15a0bfc',
+               b'message digest': '5d0689ef49d2fae572b881b123a85ffa21595f36',
+               b'1234567890' * 8: '9b752e45573d4b39f4dbd3323cab82bf63326bfb',
+               b'a' * 1000000: '52783243c1697bdbe16d37f97f68f08325dc1528'}
+
+    def test_vectors(self):
+        from modules.ripemd160 import RIPEMD160, ripemd160
+        for msg, want in self.VECTORS.items():
+            self.assertEqual(ripemd160(msg).hex(), want)
+        h = RIPEMD160(b'message ')
+        h.update(b'digest')
+        self.assertEqual(h.hexdigest(), self.VECTORS[b'message digest'])
+
+    def test_addresses_without_system_ripemd160(self):
+        script = ('import hashlib, sys\n'
+                  'orig = hashlib.new\n'
+                  'def refuse(name, *a, **k):\n'
+                  '    if name.lower() == "ripemd160": raise ValueError("unsupported hash type " + name)\n'
+                  '    return orig(name, *a, **k)\n'
+                  'hashlib.new = refuse\n'
+                  'sys.path.insert(0, sys.argv[1]); import drain; drain.get_client("x")\n'
+                  'print(drain.address_from_passphrase(sys.argv[2], network_version=23))\n')
+        out = subprocess.run([sys.executable, '-W', 'ignore', '-c', script, str(ROOT), PASS],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), ME)
 
 
 class LockTest(unittest.TestCase):

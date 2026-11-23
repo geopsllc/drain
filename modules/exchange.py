@@ -255,7 +255,7 @@ class TrocadorClient:
         if self.min_kyc:
             params['min_kycrating'] = self.min_kyc
         trade = self._request('new_trade', params, retry=False)
-        return Order(self.name, trade.get('provider') or quote.provider, str(trade.get('trade_id')),
+        return Order(self.name, trade.get('provider') or quote.provider, str(trade.get('trade_id') or ''),
                      trade.get('address_provider') or '', trade.get('address_provider_memo') or '',
                      trade.get('address_user') or '', to_decimal(trade.get('amount_to')) or quote.amount_to,
                      trade.get('amount_from'), trade.get('ticker_to') or '', trade.get('network_to') or '')
@@ -305,22 +305,26 @@ class Exchange:
             found.append((q, client))
         return sorted(found, key=lambda qc: qc[0].amount_to, reverse=True)
 
-    def check_order(self, order, amount, quote):
+    def check_order(self, order, amount, quote, network_to=''):
         """drain sends the whole amount to the deposit address, so be strict about what we accept."""
+        if not order.order_id or order.order_id == 'None':
+            raise RuntimeError('order has no id')
         if not is_ark_address(order.deposit_address):
             raise RuntimeError(f'deposit address is not a valid ARK address: {order.deposit_address!r}')
         if order.deposit_address == self.config['convert_address']:
             raise RuntimeError('deposit address is our own address')
         if order.deposit_memo and str(order.deposit_memo).strip() not in ('0', 'None', 'null'):
             raise RuntimeError(f'deposit needs a memo ({order.deposit_memo!r}), which drain does not send')
-        if order.payout_address.strip().lower() != self.config['address_to'].strip().lower():
+        if str(order.payout_address).strip().lower() != self.config['address_to'].strip().lower():
             raise RuntimeError(f'order pays out to {order.payout_address!r}, not address_to')
         if order.amount_from not in (None, ''):
             reported = to_decimal(order.amount_from)
             if reported is None or abs(reported - amount) > Decimal('0.0001'):
                 raise RuntimeError(f'order is for {order.amount_from} {self.config["convert_from"]}, not {fmt(amount)}')
-        if order.symbol_to and order.symbol_to.lower() != self.config['convert_to'].lower():
+        if order.symbol_to and str(order.symbol_to).lower() != self.config['convert_to'].lower():
             raise RuntimeError(f'order pays out {order.symbol_to}, not {self.config["convert_to"]}')
+        if order.network_to and network_to and str(order.network_to).lower() != str(network_to).lower():
+            raise RuntimeError(f'order pays out on {order.network_to}, not {network_to}')
         if order.amount_to is not None and order.amount_to < quote.amount_to * Decimal('0.97'):
             raise RuntimeError(f'order pays ~{fmt(order.amount_to)}, more than 3% below the quote of {fmt(quote.amount_to)}')
 
@@ -329,7 +333,7 @@ class Exchange:
         for quote, client in self.quotes(amount):
             try:
                 order = client.create(quote, amount, self.config['address_to'], refund_address)
-                self.check_order(order, amount, quote)
+                self.check_order(order, amount, quote, client.pair.get('network_to', ''))
             except Exception as e:
                 log.error('%s via %s failed: %s', client.name, quote.provider, e)
                 continue

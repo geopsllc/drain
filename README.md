@@ -4,12 +4,12 @@ Drains an ARK wallet (or a fixed amount of it) into another coin, by default USD
 Swaps go through [Flashift](https://docs.flashift.app) and/or [Trocador](https://trocador.app/docs),
 called directly with your own API keys. No Lambda or other intermediary is involved.
 
-## Setup
-Works with Python 3.9 and newer. Tested on clean Debian 13, Debian testing, and Ubuntu 24.04, 26.04 and 26.10
-(x86-64 and arm64), and on macOS.
+## Setup (Ubuntu)
+Needs Python 3.10 or newer. Tested on clean Ubuntu 22.04, 24.04, 26.04 and 26.10 (x86-64 and arm64)
+and Debian 13.
 
-On Debian/Ubuntu, first: `sudo apt install python3 python3-venv`. Then:
 ```
+sudo apt install python3 python3-venv
 cd drain
 python3 -m venv .venv
 .venv/bin/pip install --no-deps -r requirements.txt
@@ -17,8 +17,10 @@ cp config.example.ini config.ini && chmod 600 config.ini
 .venv/bin/python -m unittest     # optional: offline self-test
 ```
 Keep `--no-deps`: ARK's crypto library lists `coincurve` as a dependency, but coincurve can't be
-installed on Python 3.14+ (Ubuntu 26.04, Debian testing). There drain uses a pure-Python stand-in
-(`modules/coincurve_compat.py`) that produces byte-identical keys and signatures; the tests check this.
+installed on Python 3.14+ (Ubuntu 26.04). There drain uses a pure-Python stand-in
+(`modules/coincurve_compat.py`) that produces byte-identical keys and signatures. Likewise, Ubuntu
+22.04's OpenSSL lacks the RIPEMD-160 hash ARK addresses need, so drain falls back to
+`modules/ripemd160.py`. The tests check both against fixed vectors.
 
 Fill in `config.ini` (git-ignored). API keys and phrases can come from the environment instead:
 `FLASHIFT_API_KEY`, `TROCADOR_API_KEY`, `DRAIN_PASSPHRASE`, `DRAIN_SECONDPHRASE`.
@@ -56,6 +58,20 @@ Only one run can happen at a time (`.drain.lock`).
 Network names differ per service: USDC on Polygon is `usdc` / `pol` on Flashift and `usdc` / `MATIC` on Trocador; USDC on Base is `base` on both; ARK is `ark` / `ark` and `ark` / `Mainnet`. To change the target, set `convert_to`, `address_to` and each service's `network_to`.
 
 Flashift has no refund-address field, so refunds from a Flashift order go through the provider's support. Trocador passes `convert_address` as the refund address.
+
+## Security notes
+- `config.ini` holds your passphrase: keep it `chmod 600`. drain refuses a live run if a config file
+  containing a passphrase is readable by other users. Or leave `passphrase` empty and set `DRAIN_PASSPHRASE`.
+- Set `min_rate` to a floor you'd accept (USDC per ARK). Without it drain takes the best quote it gets,
+  however bad; the only protection is that the order must stay within 3% of that quote.
+- Use your own node (`http://localhost:4003/api`) or an https URL. drain checks the node is on ARK
+  mainnet (nethash) and warns about plain http to a non-local host. A node can't redirect funds (drain
+  chooses the recipient), but it can misreport balance or nonce.
+- The deposit address comes from the exchange; drain can only check that it is a valid ARK address that
+  isn't yours, needs no memo, and that the order pays `address_to` the right coin on the right network
+  for exactly the amount sent.
+- Dependencies are installed from PyPI with exact pins for small packages and security-patched minimums
+  for the HTTP/TLS stack; run `pip-audit` occasionally.
 
 ## Tests
 ```

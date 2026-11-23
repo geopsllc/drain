@@ -6,6 +6,8 @@ quotes, but creates no order and sends nothing.
 """
 import argparse
 import fcntl
+import ipaddress
+import stat
 import logging
 import os
 import sys
@@ -13,6 +15,13 @@ from configparser import ConfigParser, Error as ConfigError
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
+
+if sys.version_info < (3, 10):
+    sys.exit('drain needs Python 3.10 or newer (current dependency releases with security fixes need it)')
+
+from modules import ripemd160  # noqa: E402
+ripemd160.install()  # Ubuntu 22.04's OpenSSL 3 lacks ripemd160, which ARK addresses need
 
 try:
     import coincurve  # noqa: F401  (used by arkecosystem-crypto)
@@ -31,12 +40,17 @@ from modules.exchange import ATOMIC, EVM_ADDRESS, EVM_NETWORKS, Exchange, fmt, i
 HERE = Path(__file__).resolve().parent
 UNIT = 10_000              # amounts are truncated to 4 decimals (1 ARK = 100000000)
 STATIC_FEE = 10_000_000    # ARK static transfer fee, used when the node's fee config can't be read
+MAINNET_NETHASH = '6e84d08bd299ed97c212c886c98a57e36545c8f5d645ca7eeae63a8bd62d8988'
 VENDOR_FIELD = 'drain'
 log = logging.getLogger('drain')
 
 
 class Abort(Exception):
     """Stop the run with a message; nothing was sent."""
+
+
+class WrongNetwork(Abort):
+    """The node is reachable but not ARK mainnet; never fall back to test_amt for this."""
 
 
 def get_config(path=None):
@@ -51,6 +65,12 @@ def get_config(path=None):
     if not parser.has_section('static'):
         raise Abort(f'{path} has no [static] section')
     s = parser['static']
+    if s.get('passphrase') and path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        msg = f'{path} holds a passphrase but is readable by other users; run: chmod 600 {path}'
+        if (s.get('test') or 'Y').strip().upper() == 'Y':
+            log.warning(msg)
+        else:
+            raise Abort(msg)
 
     def number(key, default):
         value = to_decimal(s.get(key) or default)
@@ -93,12 +113,36 @@ def get_config(path=None):
         raise Abort(f'address_to must be a 0x address for {", ".join(sorted(networks & EVM_NETWORKS))}')
     if config['fixed'] and config['fixed_amt'] <= 0:
         raise Abort('fixed = Y needs fixed_amt > 0')
+    node = urlsplit(config['node'])
+    if node.scheme not in ('http', 'https') or not node.hostname:
+        raise Abort(f'node must be an http(s) URL, got {config["node"]!r}')
+    if node.scheme == 'http' and not is_local(node.hostname):
+        log.warning('node %s uses plain http over the network; prefer https', config['node'])
     return config
+
+
+def is_local(host):
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback or ipaddress.ip_address(host).is_private
+    except ValueError:
+        return False
 
 
 def get_client(node):
     set_custom_network(datetime(2017, 3, 21, 13, 0, 0), 23, 170)  # ARK mainnet epoch, version, wif
     return ArkClient(node)
+
+
+def check_network(client):
+    """Refuse nodes that aren't ARK mainnet: the wallet data and broadcast would be for the wrong chain."""
+    try:
+        nethash = client.node.configuration()['data']['nethash']
+    except Exception as e:
+        raise Abort(f'Cannot read node configuration: {e}')
+    if nethash != MAINNET_NETHASH:
+        raise WrongNetwork(f'Node is not on ARK mainnet (nethash {nethash})')
 
 
 def get_fee(client):
@@ -198,10 +242,11 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
 
     wallet = fee = None
     try:
+        check_network(client)
         wallet = get_wallet(client, config['convert_address'])
         fee = get_fee(client)
     except Abort as e:
-        if not config['test']:
+        if not config['test'] or isinstance(e, WrongNetwork):
             raise
         log.warning('%s; quoting test_amt instead', e)
 
@@ -269,7 +314,7 @@ def main(argv=None):
         config = get_config(args.config)
         if args.test:
             config['test'] = True
-        lock = open(HERE / '.drain.lock', 'w')
+        lock = os.open(HERE / '.drain.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -281,7 +326,8 @@ def main(argv=None):
         log.error('%s', e)
         return 1
     except Exception:
-        log.exception('Unexpected error; check exchange.txt for an order created in this run (it is only funded once logged as sent)')
+        log.exception('Unexpected error; check the exchange log for an order created in this run '
+                      '(it is only funded once logged as sent)')
         return 2
 
 
