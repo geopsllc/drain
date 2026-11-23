@@ -199,7 +199,7 @@ class TrocadorClient:
         self.rate = (settings.get('rate') or 'floating').strip().lower()
         self.min_kyc = (settings.get('min_kycrating') or '').strip().upper()
         self.pair = {'ticker_from': pair['from'], 'network_from': settings.get('network_from') or 'Mainnet',
-                     'ticker_to': pair['to'], 'network_to': settings.get('network_to') or 'Polygon'}
+                     'ticker_to': pair['to'], 'network_to': settings.get('network_to') or 'MATIC'}
 
     @property
     def enabled(self):

@@ -43,7 +43,7 @@ Status is `created`, then `sent`, `declined` or `broadcast-failed`. Orders that 
 
 Only one run can happen at a time (`.drain.lock`).
 
-Network names differ per service: USDC on Polygon is `usdc` / `pol` on Flashift and `usdc` / `Polygon` on Trocador; ARK is `ark` / `ark` and `ark` / `Mainnet`.
+Network names differ per service: USDC on Polygon is `usdc` / `pol` on Flashift and `usdc` / `MATIC` on Trocador; USDC on Base is `base` on both; ARK is `ark` / `ark` and `ark` / `Mainnet`. To change the target, set `convert_to`, `address_to` and each service's `network_to`.
 
 Flashift has no refund-address field, so refunds from a Flashift order go through the provider's support. Trocador passes `convert_address` as the refund address.
 

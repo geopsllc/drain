@@ -198,7 +198,7 @@ class ConfigTests(unittest.TestCase):
         values = {'convert_address': ME, 'address_to': OUT, 'passphrase': PASS}
         values.update(static)
         lines = '\n'.join(f'{k} = {v}' for k, v in values.items())
-        return f'[static]\n{lines}\n[flashift]\napi_key = 23|abc%def\nnetwork_to = pol\n[trocador]\nnetwork_to = Polygon\n'
+        return f'[static]\n{lines}\n[flashift]\napi_key = 23|abc%def\nnetwork_to = pol\n[trocador]\nnetwork_to = MATIC\n'
 
     def test_valid_config_and_defaults(self):
         cfg = drain.get_config(self.write(self.base()))
@@ -342,7 +342,7 @@ class ExchangeTests(HTTPTest):
         trade = [c for c in self.http.calls if c[1] == 'new_trade'][0][2]['params']
         self.assertEqual((trade['refund'], trade['address'], trade['amount_from'], trade['fixed'], trade['id']),
                          (ME, OUT, '1000', 'False', 'R1'))
-        self.assertEqual(trade['network_to'], 'Polygon')
+        self.assertEqual(trade['network_to'], 'MATIC')
 
     def test_fallback_when_best_fails(self):
         for name, bad in {'http error': Resp(500, {'error': 'boom'}), 'html': Resp(200, '<html>'),
