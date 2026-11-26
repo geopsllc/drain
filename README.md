@@ -1,4 +1,4 @@
-# Drain (ARK → any coin, personal version)
+# Drain (ARK → USDC / USDT, personal version)
 
 Drains an ARK wallet (or a fixed amount of it) into USDC or USDT on Polygon, Base, Ethereum, Arbitrum,
 Optimism or BNB Chain. Swaps go through [Flashift](https://docs.flashift.app) and
@@ -96,8 +96,9 @@ Flashift has no refund-address field, so refunds from a Flashift order go throug
 ## Security notes
 - `config.ini` holds your passphrase: keep it `chmod 600`. drain refuses a live run if a config file
   containing a passphrase is readable by other users. Or leave `passphrase` empty and set `DRAIN_PASSPHRASE`.
-- Set `min_rate` to a floor you'd accept (USDC per ARK). Without it drain takes the best quote it gets,
-  however bad; the only protection is that the order must stay within 3% of that quote.
+- Set `min_rate` to a floor you'd accept, in USDC or USDT (whichever `convert_to` is) per ARK, e.g. `0.10`.
+  Without it drain takes the best quote it gets, however bad; the only protection is that the order must stay
+  within 3% of that quote.
 - The default node is the public `https://api.ark.io/api`; your own node (`http://localhost:4003/api`) or any https URL works too. drain checks the node is on ARK
   mainnet (nethash) and warns about plain http to a non-local host. A node can't redirect funds (drain
   chooses the recipient), but it can misreport balance or nonce.
