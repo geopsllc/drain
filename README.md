@@ -1,8 +1,11 @@
-# Drain (ARK → any coin, personal version)
+# Drain (ARK → any coin)
 
 Drains an ARK wallet (or a fixed amount of it) into another coin, by default USDC on Polygon.
 Swaps go through [Flashift](https://docs.flashift.app) and/or [Trocador](https://trocador.app/docs),
-called directly with your own API keys. No Lambda or other intermediary is involved.
+called directly with your own API keys; no other service is involved.
+
+For a version that needs no API keys (swaps through the ARK Exchange Worker), see the
+[`ark`](https://github.com/geopsllc/drain/tree/ark) branch.
 
 Based on [drain](https://github.com/galperins4/drain) by [galperins4](https://github.com/galperins4)
 (`ark` branch), who wrote the original tool; see Credits below.
@@ -74,8 +77,8 @@ Flashift has no refund-address field, so refunds from a Flashift order go throug
 ## Security notes
 - `config.ini` holds your passphrase: keep it `chmod 600`. drain refuses a live run if a config file
   containing a passphrase is readable by other users. Or leave `passphrase` empty and set `DRAIN_PASSPHRASE`.
-- Set `min_rate` to a floor you'd accept (USDC per ARK). Without it drain takes the best quote it gets,
-  however bad; the only protection is that the order must stay within 3% of that quote.
+- Set `min_rate` to a floor you'd accept, in `convert_to` per ARK (e.g. USDC per ARK, `0.10`). Without it
+  drain takes the best quote it gets, however bad; the only protection is that the order must stay within 3% of that quote.
 - The default node is the public `https://api.ark.io/api`; your own node (`http://localhost:4003/api`) or any https URL works too. drain checks the node is on ARK
   mainnet (nethash) and warns about plain http to a non-local host. A node can't redirect funds (drain
   chooses the recipient), but it can misreport balance or nonce.
@@ -96,7 +99,6 @@ See `config.example.ini` for every option with comments.
 
 ## Credits
 drain was created by **[galperins4](https://github.com/galperins4)**: https://github.com/galperins4/drain.
-This repository keeps the original commit history. The personal version replaces the original's
-Lambda-based exchange calls with direct Flashift/Trocador clients, and adds the safety checks, tests and
-Ubuntu install support described above.
-
+This repository keeps the original commit history. This version calls Flashift and Trocador directly with your
+own API keys (or, on the `ark` branch, swaps through the ARK Exchange Worker), and adds the safety checks, tests
+and Ubuntu install support described above.
