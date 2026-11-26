@@ -1,4 +1,5 @@
-"""Drain an ARK wallet into another coin (e.g. USDC on Polygon) via Flashift and/or Trocador.
+"""Drain an ARK wallet into USDC or USDT on an EVM chain through the ARK Exchange Worker
+(Flashift and Trocador; the Worker holds their API keys, so drain needs none).
 
 Config is read from --config, $DRAIN_CONFIG, or config.ini next to this script
 (see config.example.ini). With test = Y (or --test) it runs every check and fetches
@@ -35,7 +36,8 @@ from crypto.identity.address import address_from_passphrase
 from crypto.identity.public_key import PublicKey
 from crypto.transactions.builder.transfer import Transfer
 
-from modules.exchange import ATOMIC, EVM_ADDRESS, EVM_NETWORKS, Exchange, fmt, is_ark_address, to_decimal
+from modules.exchange import (ATOMIC, DEFAULT_WORKER, EVM_ADDRESS, NETWORKS, SERVICES, Exchange, fmt,  # noqa: E402
+                              is_ark_address, to_decimal)
 
 HERE = Path(__file__).resolve().parent
 UNIT = 10_000              # amounts are truncated to 4 decimals (1 ARK = 100000000)
@@ -86,8 +88,10 @@ def get_config(path=None):
         'convert_from': (s.get('convert_from') or 'ark').strip().lower(),
         'convert_address': (s.get('convert_address') or '').strip(),
         'convert_to': (s.get('convert_to') or 'usdc').strip().lower(),
+        'network': (s.get('network') or 'polygon').strip().lower(),
         'address_to': (s.get('address_to') or '').strip(),
-        'providers': [p.strip() for p in (s.get('providers') or 'Flashift, Trocador').split(',') if p.strip()],
+        'worker': (os.environ.get('DRAIN_WORKER') or s.get('worker') or DEFAULT_WORKER).strip().rstrip('/'),
+        'providers': [p.strip() for p in (s.get('providers') or ', '.join(SERVICES)).split(',') if p.strip()],
         'fixed': (s.get('fixed') or 'N').strip().upper() == 'Y',
         'fixed_amt': number('fixed_amt', '0'),
         'min': (s.get('min') or 'N').strip().upper() == 'Y',
@@ -97,8 +101,9 @@ def get_config(path=None):
         'keep': number('keep', '0'),
         'exchange_log': str(HERE / (s.get('exchange_log') or 'exchange.txt')),
     }
-    for section in ('flashift', 'trocador'):
-        config[section] = dict(parser[section]) if parser.has_section(section) else {}
+    old = [sec for sec in ('flashift', 'trocador') if parser.has_section(sec)]
+    if old:
+        log.warning('[%s] in %s is ignored: the exchange worker holds the API keys now', '], ['.join(old), path)
     config['passphrase'] = ' '.join(config['passphrase'].split())
     config['secondphrase'] = ' '.join(config['secondphrase'].split())
     if config['secondphrase'] == 'None':
@@ -110,15 +115,25 @@ def get_config(path=None):
         raise Abort(f'convert_address is not a valid ARK address: {config["convert_address"]!r}')
     if not config['address_to']:
         raise Abort('address_to is empty')
-    networks = {(config[s].get('network_to') or '').strip().lower() for s in ('flashift', 'trocador')}
-    if networks & EVM_NETWORKS and not EVM_ADDRESS.match(config['address_to']):
-        raise Abort(f'address_to must be a 0x address for {", ".join(sorted(networks & EVM_NETWORKS))}')
+    if config['network'] not in NETWORKS:
+        raise Abort(f'network must be one of {", ".join(NETWORKS)}, got {config["network"]!r}')
+    if config['convert_to'] not in NETWORKS[config['network']]:
+        offered = ' or '.join(NETWORKS[config['network']])
+        raise Abort(f'{config["convert_to"]} is not offered on {config["network"]}: use {offered}')
+    if not EVM_ADDRESS.match(config['address_to']):
+        raise Abort(f'address_to must be a 0x address for {config["network"]}')
     if config['fixed'] and config['fixed_amt'] <= 0:
         raise Abort('fixed = Y needs fixed_amt > 0')
     if config['min'] and config['min_amt'] <= 0:
         raise Abort('min = Y needs min_amt > 0')
     if config['min'] and config['fixed'] and config['min_amt'] > config['fixed_amt']:
         raise Abort(f'min_amt ({config["min_amt"]}) is above fixed_amt ({config["fixed_amt"]}); nothing would ever be sent')
+    worker = urlsplit(config['worker'])
+    if worker.scheme not in ('http', 'https') or not worker.hostname:
+        raise Abort(f'worker must be an http(s) URL, got {config["worker"]!r}')
+    if worker.scheme == 'http' and not is_local(worker.hostname):
+        # the worker hands out the deposit address drain sends to: never fetch it over plain http
+        raise Abort(f'worker {config["worker"]} must use https (plain http only for a local test worker)')
     node = urlsplit(config['node'])
     if node.scheme not in ('http', 'https') or not node.hostname:
         raise Abort(f'node must be an http(s) URL, got {config["node"]!r}')
@@ -298,9 +313,10 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
         quotes = exchange.quotes(amount)
         if not quotes:
             raise Abort('No usable quotes')
-        best = quotes[0][0]
-        log.info('Would use %s via %s (%s): %s ARK -> ~%s %s to %s', best.service, best.provider, best.rate_type,
-                 fmt(amount), fmt(best.amount_to), config['convert_to'], config['address_to'])
+        best = quotes[0]
+        log.info('Would use %s via %s (%s): %s ARK -> ~%s %s on %s to %s', best.service, best.provider,
+                 best.rate_type, fmt(amount), fmt(best.amount_to), config['convert_to'], config['network'],
+                 config['address_to'])
         return 0
 
     order = exchange.create(amount, refund_address=config['convert_address'])
@@ -309,7 +325,7 @@ def run(config, client, exchange, assume_yes=False, interactive=False):
 
     tx = build_transfer(config, order.deposit_address, units, fee, nonce)
     summary = (f'Send {fmt(amount)} ARK (+{fmt(Decimal(fee) / ATOMIC)} fee) to {order.deposit_address} '
-               f'for ~{fmt(order.amount_to)} {config["convert_to"]} via {order.service}/{order.provider} '
+               f'for ~{fmt(order.amount_to)} {config["convert_to"]} on {config["network"]} via {order.service}/{order.provider} '
                f'(order {order.order_id})')
     track = order.tracking_text()
     if track:

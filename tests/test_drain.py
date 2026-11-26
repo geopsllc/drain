@@ -1,4 +1,4 @@
-"""Offline tests for drain: fake ARK node, faked Flashift/Trocador HTTP. Run: .venv/bin/python -m unittest -v"""
+"""Offline tests for drain: fake ARK node, faked exchange worker HTTP. Run: .venv/bin/python -m unittest -v"""
 import io
 import json
 import os
@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 import drain  # noqa: E402
 from modules import exchange as ex  # noqa: E402
-from modules.exchange import Exchange, FlashiftClient, Order, Quote, TrocadorClient, fmt, is_ark_address  # noqa: E402
+from modules.exchange import Exchange, Order, Quote, fmt, is_ark_address  # noqa: E402
 
 drain.get_client('http://unused')  # sets the ARK mainnet network for the crypto library
 
@@ -32,19 +32,19 @@ OUT = '0x1111111111111111111111111111111111111111'
 def make_config(**over):
     cfg = {
         'node': 'http://node', 'test': False, 'passphrase': PASS, 'secondphrase': '',
-        'convert_from': 'ark', 'convert_address': ME, 'convert_to': 'usdc', 'address_to': OUT,
-        'providers': ['Flashift', 'Trocador'], 'fixed': False, 'fixed_amt': D(0), 'min': False, 'min_amt': D(0), 'test_amt': D(750),
+        'convert_from': 'ark', 'convert_address': ME, 'convert_to': 'usdc', 'network': 'polygon',
+        'address_to': OUT, 'worker': 'https://worker.test', 'providers': ['Flashift', 'Trocador'], 'fixed': False, 'fixed_amt': D(0), 'min': False, 'min_amt': D(0), 'test_amt': D(750),
         'min_rate': D(0), 'keep': D(0), 'exchange_log': os.devnull,
-        'flashift': {'api_key': 'fk'}, 'trocador': {'api_key': 'tk'},
     }
     cfg.update(over)
     return cfg
 
 
 class Resp:
-    def __init__(self, status, body):
+    def __init__(self, status, body, headers=None):
         self.status_code = status
         self._body = body
+        self.headers = headers or {}
         self.text = body if isinstance(body, str) else json.dumps(body)
 
     def json(self):
@@ -111,38 +111,45 @@ class FakeHTTP:
         return sum(1 for c in self.calls if c[1] == name)
 
 
-FL_QUOTES = {'message': 'OK', 'data': [
-    {'provider_name': 'Changelly', 'exchange_type': 'floating', 'amount': '127.9', 'min_amount': '232',
-     'max_amount': '136786', 'tags': ['Recommended', 'AI Best Rate']},
-    {'provider_name': 'Changelly', 'exchange_type': 'fixed', 'amount': '126.4', 'min_amount': '387',
-     'max_amount': '136786', 'tags': []}]}
-TR_RATE = {'trade_id': 'R1', 'provider': 'SimpleSwap', 'fixed': 'False', 'amount_to': '128.5',
-           'quotes': {'quotes': [{'provider': 'SimpleSwap', 'amount_to': '128.5', 'kycrating': 'B'},
-                                 {'provider': 'MoneroBridge', 'amount_to': '126.9', 'kycrating': 'A'}]}}
+W_QUOTES = {'amount': '1000', 'network': 'polygon', 'coin': 'usdc', 'errors': [], 'at': 1, 'quotes': [
+    {'service': 'Trocador', 'provider': 'SimpleSwap', 'rateType': 'floating', 'amountTo': '128.5',
+     'networkTo': 'MATIC', 'ref': {'id': 'R1'}, 'kyc': 'B', 'servicePick': True, 'best': True},
+    {'service': 'Flashift', 'provider': 'Changelly', 'rateType': 'floating', 'amountTo': '127.9',
+     'networkTo': 'pol', 'ref': {}, 'tags': ['Recommended'], 'servicePick': True, 'best': False},
+    {'service': 'Trocador', 'provider': 'MoneroBridge', 'rateType': 'floating', 'amountTo': '126.9',
+     'networkTo': 'MATIC', 'ref': {'id': 'R1'}, 'kyc': 'A', 'best': False}]}
 
 
-def fl_info(amount='1000', address_from=DEP, address_to=OUT, extra=None):
-    return Resp(200, {'symbol_from': 'ark', 'network_from': 'ark', 'symbol_to': 'usdc', 'network_to': 'pol',
-                      'amount_from': amount, 'amount_to': '127.9', 'address_from': address_from,
-                      'address_to': address_to, 'status': 'waiting', 'extra_from': extra})
-
-
-def tr_trade(**over):
-    body = {'trade_id': 'T1', 'provider': 'SimpleSwap', 'ticker_to': 'usdc', 'network_to': 'MATIC',
-            'amount_from': '1000', 'amount_to': '128.5', 'address_provider': DEP,
-            'address_provider_memo': None, 'address_user': OUT, 'id_provider': 'ss123'}
+def w_order(**over):
+    body = {'service': 'Trocador', 'provider': 'SimpleSwap', 'orderId': 'T1', 'providerOrderId': 'ss123',
+            'depositAddress': DEP, 'depositMemo': '', 'payoutAddress': OUT, 'amountTo': '128.5',
+            'amountFrom': '1000', 'symbolTo': 'usdc', 'networkTo': 'MATIC'}
     body.update(over)
-    return Resp(200, body)
+    return Resp(200, {'order': body})
 
 
-def default_routes(**over):
-    routes = {'getEstimatedAmount': Resp(200, FL_QUOTES),
-              'createTransaction': Resp(200, {'status': 'OK', 'exchange_id': 'Changelly_floating_x'}),
-              'getTransactionInfo': fl_info(),
-              'new_rate': Resp(200, TR_RATE),
-              'new_trade': tr_trade()}
-    routes.update(over)
-    return routes
+def fl_order(**over):
+    body = {'service': 'Flashift', 'provider': 'Changelly', 'orderId': 'Changelly_floating_x', 'providerOrderId': 'x',
+            'depositAddress': DEP, 'depositMemo': '', 'payoutAddress': OUT, 'amountTo': '127.9',
+            'amountFrom': '1000', 'symbolTo': 'usdc', 'networkTo': 'pol'}
+    body.update(over)
+    return Resp(200, {'order': body})
+
+
+def default_routes(quote=None, trocador=None, flashift=None, monero=None):
+    """The worker's /quote and /order; orders are answered per quoted service (MoneroBridge separately)."""
+    answers = {'Trocador': trocador or w_order(), 'Flashift': flashift or fl_order(),
+               'MoneroBridge': monero or w_order(provider='MoneroBridge', amountTo='126.9', providerOrderId='')}
+
+    def order(kw):
+        q = kw['json']['quote']
+        out = answers['MoneroBridge' if q['provider'] == 'MoneroBridge' else q['service']]
+        return out(kw) if callable(out) else out
+    return {'/quote': quote or Resp(200, W_QUOTES), '/order': order}
+
+
+def quoted_amounts(http):
+    return [c[2]['json']['amount'] for c in http.calls if c[1] == 'quote']
 
 
 class HTTPTest(unittest.TestCase):
@@ -198,13 +205,15 @@ class ConfigTests(unittest.TestCase):
         values = {'convert_address': ME, 'address_to': OUT, 'passphrase': PASS}
         values.update(static)
         lines = '\n'.join(f'{k} = {v}' for k, v in values.items())
-        return f'[static]\n{lines}\n[flashift]\napi_key = 23|abc%def\nnetwork_to = pol\n[trocador]\nnetwork_to = MATIC\n'
+        return f'[static]\n{lines}\n'
 
     def test_valid_config_and_defaults(self):
         cfg = drain.get_config(self.write(self.base()))
         self.assertTrue(cfg['test'], 'test mode must be the default')
-        self.assertEqual(cfg['flashift']['api_key'], '23|abc%def', '% must not break parsing')
+        self.assertEqual((cfg['convert_to'], cfg['network'], cfg['worker']), ('usdc', 'polygon', 'https://xc.geops.net'))
         self.assertEqual(cfg['providers'], ['Flashift', 'Trocador'])
+        cfg = drain.get_config(self.write(self.base(exchange_log='100%.txt')))
+        self.assertTrue(cfg['exchange_log'].endswith('100%.txt'), '% must not break parsing')
         self.assertEqual(cfg['secondphrase'], '')
 
     def test_passphrase_whitespace_normalized(self):
@@ -224,6 +233,11 @@ class ConfigTests(unittest.TestCase):
             'min without amount': self.base(min='Y', min_amt='0'),
             'min above fixed': self.base(fixed='Y', fixed_amt='400', min='Y', min_amt='500'),
             'not ark': self.base(convert_from='btc'),
+            'unknown network': self.base(network='tron'),
+            'unknown coin': self.base(convert_to='btc'),
+            'usdt on base': self.base(convert_to='usdt', network='base'),
+            'worker over plain http': self.base(worker='http://xc.geops.net'),
+            'worker not a url': self.base(worker='xc.geops.net'),
             'no static': '[flashift]\napi_key = x\n',
             'garbage': 'this is not an ini file',
         }
@@ -260,6 +274,24 @@ class ConfigTests(unittest.TestCase):
         for ok in ('http://localhost:4003/api', 'http://127.0.0.1:4003/api', 'http://192.168.1.9:4003/api',
                    'https://api.ark.io/api'):
             self.assertTrue(drain.get_config(self.write(self.base(node=ok)))['node'])
+
+    def test_coins_and_networks(self):
+        for net, coins in ex.NETWORKS.items():
+            for coin in coins:
+                with self.subTest(f'{coin} on {net}'):
+                    cfg = drain.get_config(self.write(self.base(convert_to=coin.upper(), network=net.title())))
+                    self.assertEqual((cfg['convert_to'], cfg['network']), (coin, net))
+
+    def test_worker_url(self):
+        for ok in ('https://xc.geops.net/', 'http://127.0.0.1:8787', 'http://localhost:8787'):
+            self.assertEqual(drain.get_config(self.write(self.base(worker=ok)))['worker'], ok.rstrip('/'))
+        with mock.patch.dict(os.environ, {'DRAIN_WORKER': 'https://other.example'}):
+            self.assertEqual(drain.get_config(self.write(self.base()))['worker'], 'https://other.example')
+
+    def test_old_key_sections_are_ignored(self):
+        with self.assertLogs('drain', 'WARNING') as logs:
+            drain.get_config(self.write(self.base() + '[flashift]\napi_key = x\n[trocador]\napi_key = y\n'))
+        self.assertIn('ignored', ' '.join(logs.output))
 
     def test_env_overrides(self):
         with mock.patch.dict(os.environ, {'DRAIN_PASSPHRASE': 'from env'}):
@@ -321,131 +353,152 @@ class PlanTests(unittest.TestCase):
 
 # ---------------------------------------------------------------- provider selection
 
-class PickTests(unittest.TestCase):
-    def test_flashift_pick(self):
-        pick = FlashiftClient.pick
-        self.assertEqual(pick(FL_QUOTES['data'], D(1000), 'floating')['amount'], '127.9')
-        self.assertEqual(pick(FL_QUOTES['data'], D(1000), 'fixed')['amount'], '126.4')
-        self.assertIsNone(pick(FL_QUOTES['data'], D(300), 'fixed'), 'below fixed minimum')
-        self.assertIsNone(pick(FL_QUOTES['data'], D(200000), 'any'), 'above maximum')
-        garbage = ['str', None, 5, {}, {'provider_name': 'X', 'exchange_type': 'floating', 'amount': 'NaN'},
-                   {'provider_name': 'Y', 'exchange_type': 'floating', 'amount': '-3'},
-                   {'provider_name': 'Z', 'exchange_type': 'floating', 'amount': '0'},
-                   {'exchange_type': 'floating', 'amount': '500'},
-                   {'provider_name': 'W', 'exchange_type': 'floating', 'amount': '50', 'min_amount': 'abc'}]
-        self.assertIsNone(pick(garbage, D(1000), 'floating'))
-        ok = garbage + [{'provider_name': 'Ok', 'exchange_type': 'floating', 'amount': '1', 'max_amount': None,
-                         'tags': None}]
-        self.assertEqual(pick(ok, D(1000), 'floating')['provider_name'], 'Ok')
+class ParseTests(unittest.TestCase):
+    def test_quotes(self):
+        q = Exchange.parse_quote(W_QUOTES['quotes'][0])
+        self.assertEqual((q.service, q.provider, q.rate_type, q.amount_to, q.network_to, q.ref, q.kyc),
+                         ('Trocador', 'SimpleSwap', 'floating', D('128.5'), 'MATIC', {'id': 'R1'}, 'B'))
+        self.assertEqual(q.as_request(), {'service': 'Trocador', 'provider': 'SimpleSwap', 'rateType': 'floating',
+                                          'ref': {'id': 'R1'}})
+        good = W_QUOTES['quotes'][1]
+        for bad in ('str', None, 5, {}, dict(good, service='Other'), dict(good, provider=''),
+                    dict(good, amountTo='NaN'), dict(good, amountTo='-3'), dict(good, amountTo='0'),
+                    dict(good, rateType='any')):
+            self.assertIsNone(Exchange.parse_quote(bad), bad)
+        self.assertEqual(Exchange.parse_quote(dict(good, ref='junk')).ref, {})
 
-    def test_flashift_tag_beats_higher_untagged(self):
-        qs = [{'provider_name': 'A', 'exchange_type': 'floating', 'amount': '130', 'tags': []},
-              {'provider_name': 'B', 'exchange_type': 'floating', 'amount': '120', 'tags': ['best rate']}]
-        self.assertEqual(FlashiftClient.pick(qs, D(1), 'floating')['provider_name'], 'B')
-
-    def test_trocador_pick(self):
-        pick = TrocadorClient.pick
-        self.assertEqual(pick(TR_RATE, 'floating')['provider'], 'SimpleSwap')
-        self.assertIsNone(pick(TR_RATE, 'fixed'))
-        mixed = dict(TR_RATE, quotes=[{'provider': 'F', 'amount_to': '140', 'fixed': True},
-                                      {'provider': 'G', 'amount_to': 'garbage'}, 'junk', None])
-        self.assertEqual(pick(mixed, 'fixed')['provider'], 'F')
-        self.assertEqual(pick(mixed, 'any')['provider'], 'F')
-        self.assertIsNone(pick({'provider': None, 'quotes': None}, 'any'))
-        self.assertIsNone(pick({'provider': 'X', 'amount_to': '0', 'quotes': []}, 'any'))
+    def test_order(self):
+        o = Exchange.parse_order(w_order()._body['order'])
+        self.assertEqual((o.order_id, o.provider_order_id, o.amount_to, o.network_to), ('T1', 'ss123', D('128.5'), 'MATIC'))
+        o = Exchange.parse_order({'orderId': 7, 'amountTo': None, 'depositMemo': None})
+        self.assertEqual((o.order_id, o.amount_to, o.deposit_memo), ('7', None, ''))
+        with self.assertRaises(RuntimeError):
+            Exchange.parse_order(None)
 
 
-# ---------------------------------------------------------------- exchange over faked HTTP
+# ---------------------------------------------------------------- exchange over a faked worker
 
 class ExchangeTests(HTTPTest):
     def exchange(self, **over):
         return Exchange(make_config(**over))
 
-    def test_best_payout_wins(self):
+    def test_best_quote_wins(self):
         self.use(default_routes())
         order = self.exchange().create(D(1000), ME)
-        self.assertEqual((order.service, order.deposit_address), ('Trocador', DEP))
-        self.assertEqual(self.http.count('createTransaction'), 0, 'no second order once one succeeded')
-        trade = [c for c in self.http.calls if c[1] == 'new_trade'][0][2]['params']
-        self.assertEqual((trade['refund'], trade['address'], trade['amount_from'], trade['fixed'], trade['id']),
-                         (ME, OUT, '1000', 'False', 'R1'))
-        self.assertEqual(trade['network_to'], 'MATIC')
+        self.assertEqual((order.service, order.provider, order.deposit_address), ('Trocador', 'SimpleSwap', DEP))
+        self.assertEqual(self.http.count('order'), 1, 'no second order once one succeeded')
+        call = [c for c in self.http.calls if c[1] == 'order'][0][2]
+        self.assertEqual(call['json'], {'amount': '1000', 'network': 'polygon', 'coin': 'usdc',
+                                        'quote': {'service': 'Trocador', 'provider': 'SimpleSwap',
+                                                  'rateType': 'floating', 'ref': {'id': 'R1'}},
+                                        'payoutAddress': OUT, 'refundAddress': ME})
+        self.assertEqual(call['headers']['User-Agent'], ex.USER_AGENT)
+        self.assertTrue(call['timeout'])
 
     def test_fallback_when_best_fails(self):
-        for name, bad in {'http error': Resp(500, {'error': 'boom'}), 'html': Resp(200, '<html>'),
-                          'timeout': ex.requests.Timeout('slow'), 'bad memo': tr_trade(address_provider_memo='123'),
-                          'bad checksum': tr_trade(address_provider=DEP_BADSUM),
-                          'own address': tr_trade(address_provider=ME),
-                          'evm deposit': tr_trade(address_provider=OUT),
-                          'payout elsewhere': tr_trade(address_user='0x' + '2' * 40),
-                          'wrong amount': tr_trade(amount_from='999'),
-                          'wrong coin': tr_trade(ticker_to='usdt'),
-                          'payout far below quote': tr_trade(amount_to='100'),
-                          'wrong network': tr_trade(network_to='ERC20'),
-                          'no order id': tr_trade(trade_id=None),
-                          'non-string payout': tr_trade(address_user={'x': 1})}.items():
+        for name, bad in {'worker error': Resp(502, {'error': 'boom'}), 'html': Resp(200, '<html>'),
+                          'no order in reply': Resp(200, {'ok': True}),
+                          'timeout': ex.requests.Timeout('slow'), 'bad memo': w_order(depositMemo='123'),
+                          'bad checksum': w_order(depositAddress=DEP_BADSUM),
+                          'own address': w_order(depositAddress=ME),
+                          'evm deposit': w_order(depositAddress=OUT),
+                          'payout elsewhere': w_order(payoutAddress='0x' + '2' * 40),
+                          'wrong amount': w_order(amountFrom='999'),
+                          'wrong coin': w_order(symbolTo='usdt'),
+                          'no coin': w_order(symbolTo=''),
+                          'payout far below quote': w_order(amountTo='100'),
+                          'no payout amount': w_order(amountTo=None),
+                          'wrong network': w_order(networkTo='ERC20'),
+                          'no network': w_order(networkTo=''),
+                          'other service': w_order(service='Flashift'),
+                          'no order id': w_order(orderId=None),
+                          'non-string payout': w_order(payoutAddress={'x': 1})}.items():
             with self.subTest(name):
-                self.use(default_routes(new_trade=bad))
+                self.use(default_routes(trocador=bad))
                 order = self.exchange().create(D(1000), ME)
                 self.assertEqual(order.service, 'Flashift')
-                self.assertEqual(self.http.count('new_trade'), 1, 'order creation is never retried')
+                tried = [c[2]['json']['quote']['service'] for c in self.http.calls if c[1] == 'order']
+                self.assertEqual(tried, ['Trocador', 'Flashift'], 'each order is tried once, never retried')
 
-    def test_network_case_insensitive(self):
-        self.use(default_routes(new_trade=tr_trade(network_to='matic')))
-        self.assertEqual(self.exchange().create(D(1000), ME).service, 'Trocador')
-
-    def test_flashift_wrong_network(self):
-        info = fl_info()
-        info._body['network_to'] = 'eth'
-        self.use(default_routes(new_rate=Resp(200, {'error': 'x'}), getTransactionInfo=info))
-        self.assertIsNone(self.exchange().create(D(1000), ME))
-
-    def test_payout_address_case_insensitive(self):
-        self.use(default_routes(new_trade=tr_trade(address_user=OUT.upper().replace('0X', '0x'))))
+    def test_case_insensitive_matches(self):
+        self.use(default_routes(trocador=w_order(networkTo='matic', symbolTo='USDC',
+                                                 payoutAddress=OUT.upper().replace('0X', '0x'))))
         self.assertEqual(self.exchange().create(D(1000), ME).service, 'Trocador')
 
     def test_everything_fails(self):
-        self.use(default_routes(new_trade=Resp(500, {}), createTransaction=Resp(200, {'status': 'Error'})))
+        self.use(default_routes(trocador=Resp(502, {'error': 'x'}), flashift=fl_order(networkTo='eth'),
+                                monero=w_order(provider='MoneroBridge', depositMemo='5')))
         self.assertIsNone(self.exchange().create(D(1000), ME))
+        self.assertEqual(self.http.count('order'), 3)
 
-    def test_flashift_no_deposit_address(self):
-        self.use(default_routes(new_rate=Resp(200, {'error': 'Pair not available'}),
-                                getTransactionInfo=Resp(200, {'status': 'Error'})))
+    def test_at_most_three_orders(self):
+        quotes = dict(W_QUOTES, quotes=W_QUOTES['quotes'] + [dict(W_QUOTES['quotes'][2], provider='Other')] * 2)
+        self.use(default_routes(quote=Resp(200, quotes), trocador=Resp(502, {'error': 'x'}),
+                                flashift=Resp(502, {'error': 'x'}), monero=Resp(502, {'error': 'x'})))
         self.assertIsNone(self.exchange().create(D(1000), ME))
-        self.assertEqual(self.http.count('getTransactionInfo'), 5)
+        self.assertEqual(self.http.count('order'), ex.MAX_ORDER_ATTEMPTS)
+
+    def test_rate_limited_order_stops(self):
+        self.use(default_routes(trocador=Resp(429, {'error': 'Too many requests', 'retryAfter': 20})))
+        self.assertIsNone(self.exchange().create(D(1000), ME))
+        self.assertEqual(self.http.count('order'), 1, 'the next order would be refused too')
+
+    def test_bad_request_is_not_retried(self):
+        self.use(default_routes(quote=Resp(400, {'error': 'amount too large'})))
+        self.assertEqual(self.exchange().quotes(D(1000)), [])
+        self.assertEqual(self.http.count('quote'), 1)
 
     def test_quote_retries(self):
-        attempts = iter([Resp(429, 'slow down'), Resp(502, '<html>'), Resp(200, FL_QUOTES)])
-        self.use(default_routes(getEstimatedAmount=lambda kw: next(attempts)))
-        q = self.exchange(providers=['Flashift']).quotes(D(1000))
-        self.assertEqual(q[0][0].amount_to, D('127.9'))
+        for first in (Resp(502, '<html>'), ex.requests.ConnectionError('down'),
+                      Resp(429, {'error': 'busy', 'retryAfter': 12}), Resp(429, 'busy', {'Retry-After': '5'})):
+            with self.subTest(first), mock.patch.object(ex.time, 'sleep') as sleep:
+                attempts = iter([first, Resp(200, W_QUOTES)])
+                self.use(default_routes(quote=lambda kw: next(attempts)))
+                self.assertEqual(len(self.exchange().quotes(D(1000))), 3)
+                self.assertEqual(self.http.count('quote'), 2)
+                self.assertEqual(sleep.call_count, 1)
 
     def test_quote_gives_up(self):
-        self.use(default_routes(getEstimatedAmount=ex.requests.ConnectionError('down'),
-                                new_rate=Resp(200, {'error': 'Minimum amount is 250'})))
+        for name, answer in {'down': ex.requests.ConnectionError('down'),
+                             'long wait': Resp(429, {'error': 'busy', 'retryAfter': 600})}.items():
+            with self.subTest(name):
+                self.use(default_routes(quote=answer))
+                self.assertEqual(self.exchange().quotes(D(1000)), [])
+                self.assertEqual(self.http.count('quote'), 1 if name == 'long wait' else 2)
+
+    def test_service_errors_are_logged(self):
+        self.use(default_routes(quote=Resp(200, dict(W_QUOTES, errors=[{'service': 'Flashift', 'message': 'busy'}]))))
+        with self.assertLogs('modules.exchange', 'WARNING') as logs:
+            self.exchange().quotes(D(1000))
+        self.assertIn('Flashift quote failed: busy', ' '.join(logs.output))
+
+    def test_garbage_quotes_are_skipped(self):
+        self.use(default_routes(quote=Resp(200, dict(W_QUOTES, quotes=['x', None, {'service': 'Flashift'}] + W_QUOTES['quotes']))))
+        self.assertEqual(len(self.exchange().quotes(D(1000))), 3)
+        self.use(default_routes(quote=Resp(200, {'quotes': None})))
         self.assertEqual(self.exchange().quotes(D(1000)), [])
-        self.assertEqual(self.http.count('getEstimatedAmount'), 3)
 
     def test_min_rate(self):
         self.use(default_routes())
-        self.assertEqual([q.service for q, _ in self.exchange(min_rate=D('0.128')).quotes(D(1000))], ['Trocador'])
+        self.assertEqual([q.provider for q in self.exchange(min_rate=D('0.1275')).quotes(D(1000))],
+                         ['SimpleSwap', 'Changelly'])
         self.assertEqual(self.exchange(min_rate=D('0.2')).quotes(D(1000)), [])
 
-    def test_amount_strings(self):
+    def test_request_body(self):
         self.use(default_routes())
-        self.exchange().quotes(D('0.29'))
-        sent = [c[2]['params'] for c in self.http.calls]
-        self.assertEqual(sent[0]['amount'], '0.29')
-        self.assertEqual(sent[1]['amount_from'], '0.29')
+        self.exchange(convert_to='usdt', network='bsc').quotes(D('0.29'))
+        self.assertEqual(self.http.calls[0][2]['json'], {'amount': '0.29', 'network': 'bsc', 'coin': 'usdt'})
+        self.assertEqual(self.http.calls[0][0], 'post')
 
     def test_provider_list(self):
         with self.assertRaises(ValueError):
             Exchange(make_config(providers=['ChangeNow']))
-        with self.assertRaises(ValueError):
-            Exchange(make_config(flashift={}, trocador={'api_key': '  '}))
-        self.assertEqual(len(Exchange(make_config(providers=['flashift', 'Flashift', 'TROCADOR'])).clients), 2)
-        with mock.patch.dict(os.environ, {'TROCADOR_API_KEY': 'env'}):
-            self.assertEqual(len(Exchange(make_config(trocador={})).clients), 2)
+        self.assertEqual(Exchange(make_config(providers=['flashift', 'Flashift', 'TROCADOR'])).services,
+                         ['Flashift', 'Trocador'])
+        self.use(default_routes())
+        quotes = self.exchange(providers=['Flashift']).quotes(D(1000))
+        self.assertEqual([q.service for q in quotes], ['Flashift'])
+        self.assertEqual(self.exchange(providers=['Flashift']).create(D(1000), ME).service, 'Flashift')
 
     def test_log_write_failure_is_harmless(self):
         self.use(default_routes())
@@ -468,13 +521,6 @@ class TrackingTests(unittest.TestCase):
         for provider, pid, url in cases:
             with self.subTest(provider):
                 self.assertEqual(self.order('Trocador', provider, 'T1', pid).tracking(), [(provider, url)])
-
-    def test_flashift_id_parsing(self):
-        self.assertEqual(ex.flashift_provider_id('Changelly_floating_gco7jsjggps6ka86', 'Changelly'), 'gco7jsjggps6ka86')
-        self.assertEqual(ex.flashift_provider_id('ChangeNOW_fixed_fed28fc2e80b29', 'ChangeNOW'), 'fed28fc2e80b29')
-        self.assertEqual(ex.flashift_provider_id('SimpleSwap_floating_a_b', 'SimpleSwap'), 'a_b')
-        self.assertEqual(ex.flashift_provider_id('Changelly_floating_x', 'SimpleSwap'), '', 'provider mismatch')
-        self.assertEqual(ex.flashift_provider_id('weird', 'Changelly'), '')
 
     def test_fallbacks(self):
         self.assertEqual(self.order('Trocador', 'Exolix', '70Qwk1gyct', 'abc').tracking(),
@@ -519,7 +565,7 @@ class RunTests(HTTPTest):
                 self.use(default_routes())
                 with self.assertRaises(drain.Abort):
                     self.run_drain(node, **over)
-                self.assertEqual((self.http.count('new_trade'), self.http.count('createTransaction')), (0, 0))
+                self.assertEqual(self.http.count('order'), 0)
                 self.assertEqual(node.broadcasts, [])
 
     def test_wrong_network_is_fatal_even_in_test_mode(self):
@@ -547,21 +593,20 @@ class RunTests(HTTPTest):
 
         self.use(default_routes())
         self.assertEqual(self.run_drain(FakeNode(balance=300 * 10**8 + fee), test=True, **over), 0)
-        amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
-        self.assertEqual(amounts, ['1000'], 'test mode still quotes (fixed_amt) below min_amt')
+        self.assertEqual(quoted_amounts(self.http), ['1000'], 'test mode still quotes (fixed_amt) below min_amt')
 
         self.use(default_routes())
         node = FakeNode(balance=500 * 10**8 + fee)
         with self.assertRaises(drain.Abort):  # exactly min_amt is sent; fails only because the fixture order is for 1000
             self.run_drain(node, **over)
-        self.assertGreater(self.http.count('getEstimatedAmount') + self.http.count('new_rate'), 0, 'not skipped')
+        self.assertEqual(quoted_amounts(self.http), ['500'], 'not skipped')
 
     def test_others_in_pool_are_fine(self):
         self.use(default_routes())
         self.assertEqual(self.run_drain(FakeNode(pool=[{'senderPublicKey': '02' + 'ab' * 32}])), 0)
 
     def test_no_order_no_send(self):
-        self.use(default_routes(new_trade=Resp(500, {}), getEstimatedAmount=Resp(200, {'message': 'Pair is not valid'})))
+        self.use(default_routes(trocador=Resp(502, {}), flashift=Resp(200, {'error': 'x'}), monero=Resp(500, {})))
         node = FakeNode()
         with self.assertRaises(drain.Abort):
             self.run_drain(node)
@@ -589,10 +634,9 @@ class RunTests(HTTPTest):
             with self.subTest(name):
                 self.use(default_routes())
                 self.assertEqual(self.run_drain(node, test=True, passphrase=''), 0)
-                self.assertEqual((self.http.count('new_trade'), self.http.count('createTransaction')), (0, 0))
+                self.assertEqual(self.http.count('order'), 0)
                 self.assertEqual(node.broadcasts, [])
-                amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
-                self.assertEqual(amounts, ['750'], 'test mode quotes test_amt, node up or down')
+                self.assertEqual(quoted_amounts(self.http), ['750'], 'test mode quotes test_amt, node up or down')
 
     def test_test_mode_amount(self):
         cases = {
@@ -605,8 +649,7 @@ class RunTests(HTTPTest):
             with self.subTest(name):
                 self.use(default_routes())
                 self.assertEqual(self.run_drain(node, test=True, **over), 0)
-                amounts = [c[2]['params']['amount'] for c in self.http.calls if c[1] == 'getEstimatedAmount']
-                self.assertEqual(amounts, [want])
+                self.assertEqual(quoted_amounts(self.http), [want])
                 self.assertEqual(node.broadcasts, [])
 
     def test_test_mode_still_checks_a_given_passphrase(self):

@@ -1,8 +1,14 @@
 # Drain (ARK → any coin, personal version)
 
-Drains an ARK wallet (or a fixed amount of it) into another coin, by default USDC on Polygon.
-Swaps go through [Flashift](https://docs.flashift.app) and/or [Trocador](https://trocador.app/docs),
-called directly with your own API keys. No Lambda or other intermediary is involved.
+Drains an ARK wallet (or a fixed amount of it) into USDC or USDT on Polygon, Base, Ethereum, Arbitrum,
+Optimism or BNB Chain. Swaps go through [Flashift](https://docs.flashift.app) and
+[Trocador](https://trocador.app/docs) via the **ARK Exchange Worker** at `https://xc.geops.net`, the same
+service the ARK Wallet's Exchange tab uses. The Worker holds the aggregators' API keys, so **drain needs no API
+keys**. It only quotes and creates orders: it never sees your passphrase and never moves funds. drain checks
+every order itself, signs the ARK transfer locally, and links to the exchange's own order page.
+
+Prefer calling Flashift and Trocador directly with your own API keys? That version is on the
+[`static`](https://github.com/geopsllc/drain/tree/static) branch.
 
 Based on [drain](https://github.com/galperins4/drain) by [galperins4](https://github.com/galperins4)
 (`ark` branch), who wrote the original tool; see Credits below.
@@ -25,8 +31,20 @@ installed on Python 3.14+ (Ubuntu 26.04). There drain uses a pure-Python stand-i
 22.04's OpenSSL lacks the RIPEMD-160 hash ARK addresses need, so drain falls back to
 `modules/ripemd160.py`. The tests check both against fixed vectors.
 
-Fill in `config.ini` (git-ignored). API keys and phrases can come from the environment instead:
-`FLASHIFT_API_KEY`, `TROCADOR_API_KEY`, `DRAIN_PASSPHRASE`, `DRAIN_SECONDPHRASE`.
+Fill in `config.ini` (git-ignored). The phrases can come from the environment instead: `DRAIN_PASSPHRASE`,
+`DRAIN_SECONDPHRASE`; `DRAIN_WORKER` overrides the Worker URL.
+
+### Coins and networks
+Set `convert_to` and `network`; `address_to` is your 0x address there.
+
+| `network`  | `convert_to`  |
+| ---------- | ------------- |
+| `polygon`  | `usdc`, `usdt` |
+| `base`     | `usdc` (neither aggregator offers ARK → USDT on Base) |
+| `ethereum` | `usdc`, `usdt` |
+| `arbitrum` | `usdc`, `usdt` |
+| `optimism` | `usdc`, `usdt` |
+| `bsc`      | `usdc`, `usdt` (BNB Chain) |
 
 ## Running
 ```
@@ -48,11 +66,14 @@ Fill in `config.ini` (git-ignored). API keys and phrases can come from the envir
    4 decimals. The order and the transfer use exactly this amount. With `min = Y`, a run whose amount is below
    `min_amt` stops here and exits 0 (test mode warns and still quotes). E.g. `fixed_amt = 1000`,
    `min_amt = 500`: 1500 ARK available → send 1000; 700 → send 700; 300 → skip.
-3. Asks every provider in `providers` that has an API key for its best quote, and ignores quotes below `min_rate`:
-   - **Flashift**: among quotes of the configured `rate` whose min/max covers the amount, the one tagged "Recommended", then "AI Best Rate", then "Best Rate", then the highest payout.
-   - **Trocador**: the highest payout of the configured `rate` from its `new_rate` list (optionally only exchanges with `min_kycrating` or better).
-4. Creates an order with the best payout and falls back to the next if that fails. Order creation is never retried, so a timeout can't produce two orders with the same service.
-5. Refuses the order unless the deposit address is a checksum-valid ARK address that isn't yours, no memo is required, the payout goes to `address_to` in `convert_to`, the order is for exactly our amount, and its expected payout is within 3% of the quote.
+3. Asks the Worker for quotes (floating rate) and keeps those from the services in `providers` at or above
+   `min_rate`. The Worker ranks them: each service's pick (Flashift: the quote it tags "Recommended", then
+   "AI Best Rate", then "Best Rate"; Trocador: its best payout), best payout first, then the rest by payout.
+4. Has the Worker create an order for the first quote and falls back to the next if that fails, up to 3. Order
+   creation is never retried, so a timeout can't produce two orders for one quote.
+5. Refuses the order unless the deposit address is a checksum-valid ARK address that isn't yours, no memo is
+   required, the payout goes to `address_to` in `convert_to` on the quoted network, the order is for exactly
+   our amount, and its expected payout is within 3% of the quote.
 6. Signs and broadcasts the transfer and checks that the node accepted it.
 
 Every order is logged to `exchange_log` (default `exchange.txt`):
@@ -67,7 +88,8 @@ for Flashift (no per-order page) `https://exchange.flashift.app` → History →
 
 Only one run can happen at a time (`.drain.lock`).
 
-Network names differ per service: USDC on Polygon is `usdc` / `pol` on Flashift and `usdc` / `MATIC` on Trocador; USDC on Base is `base` on both; ARK is `ark` / `ark` and `ark` / `Mainnet`. To change the target, set `convert_to`, `address_to` and each service's `network_to`.
+The Worker allows 10 requests a minute per IP: a run uses one for the quote and one per order attempt. If it
+is busy, drain waits out a short `Retry-After` once for the quote and gives up on orders.
 
 Flashift has no refund-address field, so refunds from a Flashift order go through the provider's support. Trocador passes `convert_address` as the refund address.
 
@@ -79,9 +101,10 @@ Flashift has no refund-address field, so refunds from a Flashift order go throug
 - The default node is the public `https://api.ark.io/api`; your own node (`http://localhost:4003/api`) or any https URL works too. drain checks the node is on ARK
   mainnet (nethash) and warns about plain http to a non-local host. A node can't redirect funds (drain
   chooses the recipient), but it can misreport balance or nonce.
-- The deposit address comes from the exchange; drain can only check that it is a valid ARK address that
-  isn't yours, needs no memo, and that the order pays `address_to` the right coin on the right network
-  for exactly the amount sent.
+- The deposit address comes from the exchange through the Worker; drain can only check that it is a valid ARK
+  address that isn't yours, needs no memo, and that the order pays `address_to` the right coin on the right
+  network for exactly the amount sent. That's why the Worker URL must be https (plain http is only allowed
+  for a local test Worker), and why the order page link goes straight to the exchange.
 - Dependencies are installed from PyPI with exact pins for small packages and security-patched minimums
   for the HTTP/TLS stack; run `pip-audit` occasionally.
 
@@ -89,7 +112,7 @@ Flashift has no refund-address field, so refunds from a Flashift order go throug
 ```
 .venv/bin/python -m unittest -v
 ```
-Runs offline against a fake ARK node and faked Flashift/Trocador responses.
+Runs offline against a fake ARK node and a faked Worker.
 
 ## Configuration
 See `config.example.ini` for every option with comments.
@@ -97,6 +120,6 @@ See `config.example.ini` for every option with comments.
 ## Credits
 drain was created by **[galperins4](https://github.com/galperins4)**: https://github.com/galperins4/drain.
 This repository keeps the original commit history. The personal version replaces the original's
-Lambda-based exchange calls with direct Flashift/Trocador clients, and adds the safety checks, tests and
-Ubuntu install support described above.
+Lambda-based exchange calls with the ARK Exchange Worker (or, on the `static` branch, direct Flashift/Trocador
+clients), and adds the safety checks, tests and Ubuntu install support described above.
 
