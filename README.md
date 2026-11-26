@@ -120,7 +120,6 @@ See `config.example.ini` for every option with comments.
 
 ## Credits
 drain was created by **[galperins4](https://github.com/galperins4)**: https://github.com/galperins4/drain.
-This repository keeps the original commit history. The personal version replaces the original's
-Lambda-based exchange calls with the ARK Exchange Worker (or, on the `ark-static` branch, direct Flashift/Trocador
-clients), and adds the safety checks, tests and Ubuntu install support described above.
-
+This repository keeps the original commit history. This version swaps through the ARK Exchange Worker (or, on
+the `ark-static` branch, calls Flashift and Trocador directly with your own API keys), and adds the safety checks,
+tests and Ubuntu install support described above.
