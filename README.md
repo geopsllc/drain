@@ -8,7 +8,7 @@ keys**. It only quotes and creates orders: it never sees your passphrase and nev
 every order itself, signs the ARK transfer locally, and links to the exchange's own order page.
 
 Prefer calling Flashift and Trocador directly with your own API keys? That version is on the
-[`static`](https://github.com/geopsllc/drain/tree/static) branch.
+[`ark-static`](https://github.com/geopsllc/drain/tree/ark-static) branch.
 
 Based on [drain](https://github.com/galperins4/drain) by [galperins4](https://github.com/galperins4)
 (`ark` branch), who wrote the original tool; see Credits below.
@@ -120,6 +120,6 @@ See `config.example.ini` for every option with comments.
 ## Credits
 drain was created by **[galperins4](https://github.com/galperins4)**: https://github.com/galperins4/drain.
 This repository keeps the original commit history. The personal version replaces the original's
-Lambda-based exchange calls with the ARK Exchange Worker (or, on the `static` branch, direct Flashift/Trocador
+Lambda-based exchange calls with the ARK Exchange Worker (or, on the `ark-static` branch, direct Flashift/Trocador
 clients), and adds the safety checks, tests and Ubuntu install support described above.
 
