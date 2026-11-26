@@ -1,4 +1,4 @@
-# Drain (ARK → USDC / USDT, personal version)
+# Drain (ARK → USDC / USDT)
 
 Drains an ARK wallet (or a fixed amount of it) into USDC or USDT on Polygon, Base, Ethereum, Arbitrum,
 Optimism or BNB Chain. Swaps go through [Flashift](https://docs.flashift.app) and
